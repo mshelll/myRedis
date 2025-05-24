@@ -1,6 +1,9 @@
 import socket  # noqa: F401
 import threading
 
+cache = {}
+CRLF = '\r\n' # CarrageReturn \r followed by  LineFeed \n
+
 def handle_ping(elems):
     return b'+PONG\r\n'
 
@@ -8,9 +11,29 @@ def handle_echo(elems):
     inp = elems[-1]
     return b'+' + inp.encode('utf-8') + b'\r\n'
 
+def handle_set(elems):
+    print(f'set {elems=}')
+    key = elems[2]
+    value = elems[-1]
+    cache[key] = value
+    return b'+OK\r\n'
+
+def handle_get(elems):
+    print(f'get {elems=}')
+    key = elems[-1]
+    val = cache.get(key)
+    if val:
+        resp = f'${len(val)}{CRLF}{val}{CRLF}'
+    else:
+        resp = '$-1\r\n'
+
+    return resp.encode('utf-8')
+
 cmd_handler = {
     'echo': handle_echo,
     'ping': handle_ping,
+    'set': handle_set,
+    'get': handle_get,
 }
 
 def handle_client(connection):
@@ -68,6 +91,10 @@ def main():
             
     except KeyboardInterrupt:
         print("Server shutting down")
+    except Exception as e:
+        import traceback
+        traceback.print_stack()
+        print(e)
     finally:
         server_socket.close()
 
