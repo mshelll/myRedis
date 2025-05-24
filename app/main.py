@@ -1,15 +1,8 @@
 import socket  # noqa: F401
+import threading
 
 
-def main():
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
-    print("Logs from your program will appear here!")
-
-    # Uncomment this to pass the first stage
-    #
-    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
-    connection, _ = server_socket.accept()  # wait for client
-    
+def handle_client(connection):
     try:
         while True:
             # Read data from the client
@@ -35,8 +28,32 @@ def main():
     finally:
         # Clean up the connection
         connection.close()
+
+
+def main():
+    # You can use print statements as follows for debugging, they'll be visible when running tests.
+    print("Logs from your program will appear here!")
+
+    # Create server socket
+    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
+    
+    try:
+        while True:
+            # Wait for a client to connect
+            connection, client_address = server_socket.accept()
+            print(f"New connection from {client_address}")
+            
+            # Create a new thread to handle this client
+            client_thread = threading.Thread(target=handle_client, args=(connection,))
+            client_thread.daemon = True  # Set as daemon so it exits when main thread exits
+            client_thread.start()
+            
+    except KeyboardInterrupt:
+        print("Server shutting down")
+    finally:
         server_socket.close()
 
 
 if __name__ == "__main__":
+    main()
     main()
