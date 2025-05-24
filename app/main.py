@@ -1,6 +1,17 @@
 import socket  # noqa: F401
 import threading
 
+def handle_ping(elems):
+    return b'+PONG\r\n'
+
+def handle_echo(elems):
+    inp = elems[-1]
+    return b'+' + inp.encode('utf-8') + b'\r\n'
+
+cmd_handler = {
+    'echo': handle_echo,
+    'ping': handle_ping,
+}
 
 def handle_client(connection):
     try:
@@ -14,14 +25,21 @@ def handle_client(connection):
                 break
             
             # Convert bytes to string and count PING occurrences
+            print(data)
             data_str = data.decode('utf-8')
-            ping_count = data_str.count("PING")
+            elems = data_str.split()
+            print(elems)
+            cmd = elems[2].lower()
+            print(f'{cmd=}')
+            hander = cmd_handler.get(cmd)
+            resp = hander(elems[2:])
+            # ping_count = data_str.count("PING")
             
-            print(f"Received: {data_str}")
-            print(f"Number of PING commands: {ping_count}")
+            # print(f"Received: {data_str}")
+            # print(f"Number of PING commands: {ping_count}")
             
             # For now, just respond with PONG
-            connection.sendall(b'+PONG\r\n')
+            connection.sendall(resp)
     
     except Exception as e:
         print(f"Error: {e}")
