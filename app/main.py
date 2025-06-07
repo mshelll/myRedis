@@ -1,7 +1,10 @@
+import os
 import socket  # noqa: F401
 import threading
 from datetime import datetime, timezone
+import argparse
 
+config = {}
 cache = {}
 CRLF = '\r\n' # CarrageReturn \r followed by  LineFeed \n
 
@@ -23,7 +26,9 @@ def handle_set(elems):
     expiry = 0
     if len(elems) > 5 and elems[6] == 'px':
         px = int(elems[8])
-        expiry = datetime.now(timezone.utc).timestamp() + px/1000
+        # Calculate expiry in milliseconds
+        expiry = datetime.now(timezone.utc).timestamp() + (px / 1000.0)
+        print(f'expiry {expiry}')
 
     cache[key] = (value, expiry)
     return b'+OK\r\n'
@@ -32,19 +37,45 @@ def handle_set(elems):
 def handle_get(elems):
     print(f'get {elems=}')
     key = elems[-1]
-    val, expiry = cache.get(key)
-    expired = datetime.now(timezone.utc).timestamp() > expiry if expiry else False
-    if expired:
+    
+    if key not in cache:
+        resp = '$-1\r\n'
+        return resp.encode('utf-8')
+        
+    val, expiry = cache.get(key, (None, 0))
+    current_time = datetime.now(timezone.utc).timestamp()
+    print(f'get expiry {expiry} {current_time}')
+    
+    # If expiry is set (not 0) and current time is greater than expiry
+    if expiry and current_time > expiry:
         del cache[key]
         resp = '$-1\r\n'
         return resp.encode('utf-8')
 
-    if val and not expired:
+    if val:
         resp = f'${len(val)}{CRLF}{val}{CRLF}'
     else:
         resp = '$-1\r\n'
 
+    print(resp)
     return resp.encode('utf-8')
+
+def handle_config(elems):
+    print(f'config {elems=}')
+    opr = elems[2]
+    if opr.lower() == 'get':
+        print('get config')
+        key = elems[-1]
+        val = config.get(key, '')
+
+        if val:
+            resp = f'*2{CRLF}${len(key)}{CRLF}{key}{CRLF}${len(val)}{CRLF}{val}{CRLF}'
+        else:
+            resp = '$-1\r\n'
+
+        print(resp.encode('utf-8'))
+
+        return resp.encode('utf-8')
 
 
 cmd_handler = {
@@ -52,6 +83,7 @@ cmd_handler = {
     'ping': handle_ping,
     'set': handle_set,
     'get': handle_get,
+    'config': handle_config,
 }
 
 
@@ -75,12 +107,7 @@ def handle_client(connection):
             print(f'{cmd=}')
             hander = cmd_handler.get(cmd)
             resp = hander(elems[2:])
-            # ping_count = data_str.count("PING")
 
-            # print(f"Received: {data_str}")
-            # print(f"Number of PING commands: {ping_count}")
-
-            # For now, just respond with PONG
             connection.sendall(resp)
 
     except Exception as e:
@@ -90,7 +117,36 @@ def handle_client(connection):
         connection.close()
 
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Redis server implementation')
+    parser.add_argument('--dir', type=str, default='/tmp',
+                        help='Directory for Redis data files (default: /tmp)')
+    parser.add_argument('--dbfilename', type=str, default='dump.rdb',
+                        help='Filename for the Redis database (default: dump.rdb)')
+    
+    return parser.parse_args()
+
 def main():
+    global config
+    # Parse command line arguments
+    args = parse_args()
+    
+    # Store the data directory and filename
+    data_dir = args.dir
+    db_filename = args.dbfilename
+    
+    # Full path to the database file
+    db_path = os.path.join(data_dir, db_filename)
+
+    config = {
+        'dir': data_dir,
+        'dbfilename': db_filename,
+        'dbpath': db_path,
+    }
+    
+    print(f"Redis server starting. Data will be stored at: {db_path}")
+    
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
@@ -119,5 +175,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     main()
