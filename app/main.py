@@ -128,6 +128,7 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    print("Inside main")
     global config
     # Parse command line arguments
     args = parse_args()
