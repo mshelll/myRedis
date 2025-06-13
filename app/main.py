@@ -9,14 +9,61 @@ cache = {}
 CRLF = '\r\n' # CarrageReturn \r followed by  LineFeed \n
 
 
+def handle_keys(elems):
+    try:
+        fd = open(config['dbpath'], 'rb')  # Open in binary mode
+        content = fd.read()
+        fd.close()
+        
+        print(f"content={content!r}")
+        
+        # Find DB section (between FB and FF markers)
+        start_marker = b'\xfb'
+        end_marker = b'\xff'
+        
+        start_idx = content.find(start_marker)
+        end_idx = content.find(end_marker, start_idx) if start_idx != -1 else -1
+        
+        print(f"db section {start_idx} {end_idx} {content[start_idx+1:end_idx] if start_idx != -1 and end_idx != -1 else b''}")
+        print("Find DB section Its between fb and ff")
+
+        db_section = content[start_idx+1:end_idx]
+
+        nkeys, nexpiry, encoding = db_section[0], db_section[1], db_section[2]
+
+        keys = []
+        i = 3
+        while i < len(db_section):
+            key_len = db_section[i]
+            print(f'{key_len=}')
+            key = db_section[i+1:i+key_len+1]
+            print(f'{key=}')
+            i += key_len+1
+            val_len = db_section[i]
+            print(f'{val_len=}')
+            val = db_section[i+1:i+val_len+1]
+            print(f'{val=}')
+            keys += [key.decode()]
+            i += val_len+1
+
+        resp = f'*1{CRLF}${len(keys[0])}{CRLF}{keys[0]}{CRLF}'
+
+
+        # for elem in db_section: print(elem)
+
+        # For now, just return a simple response with a placeholder
+        # In a real implementation, you would parse the RDB format properly
+        return resp.encode()
+        
+    except Exception as e:
+        print(f"Error reading database file: {e}")
+        return b'-ERR Failed to read database file\r\n'
 def handle_ping(elems):
     return b'+PONG\r\n'
-
 
 def handle_echo(elems):
     inp = elems[-1]
     return b'+' + inp.encode('utf-8') + b'\r\n'
-
 
 def handle_set(elems):
     print(f'set {elems=}')
@@ -83,6 +130,7 @@ cmd_handler = {
     'ping': handle_ping,
     'set': handle_set,
     'get': handle_get,
+    'keys': handle_keys,
     'config': handle_config,
 }
 
@@ -176,4 +224,5 @@ def main():
 
 
 if __name__ == "__main__":
+    print("Inside main")
     main()
