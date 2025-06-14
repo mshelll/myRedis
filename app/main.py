@@ -48,10 +48,10 @@ class RedisServer:
             
             keys_values = self.read_keys_from_rdb()
             if keys_values:
-                for key, value in keys_values:
+                for key, value, expiry in keys_values:
                     if key:  # Skip empty keys
                         # Store with no expiry (0)
-                        self.cache[key] = (value, 0)
+                        self.cache[key] = (value, expiry)
                 print(f"Loaded {len(self.cache)} keys from RDB file")
         except Exception as e:
             print(f"Error loading cache from RDB: {e}")
@@ -83,30 +83,46 @@ class RedisServer:
             # First byte represents the number of keys
             num_keys = db_section[0]
             print(f"RDB header indicates {num_keys} keys")
+
+            a, b = db_section[1], db_section[2]
+            print(f'{a=} {b=}')
             
             # Skip the first 3 bytes (metadata)
-            i = 3
+            i = 2
             keys_values = []
             
             # Debug: print hex representation of the db section
             print(f"DB section length: {len(db_section)} bytes")
             print(f"DB section hex: {db_section.hex()}")
+            print(f"DB section : {db_section}")
             
             # Parse key-value pairs from the RDB file
             # Format: [key_len][key][value_len][value]...
             while i < len(db_section):
                 try:
+                    print(f'{db_section[i]=}')
+                    c = db_section[i]
+                    print(f'Current byte: {hex(c)}')
+                    i += 1
+                    expiry = 0
+                    if hex(c) == '0xfc':
+                        expiry = int.from_bytes(db_section[i:i+5], byteorder='little')
+                        print(f'{expiry=}')
+                        i += 8
+
                     # Get key length
+                    i += 1
                     key_len = db_section[i]
+                    print(f'{key_len=} {i=}')
                     i += 1
                     
-                    if key_len == 0:  # Skip null keys
-                        print("Skipping zero-length key")
-                        continue
+                    # if key_len == 0:  # Skip null keys
+                    #     print("Skipping zero-length key")
+                    #     continue
                     
-                    if i + key_len > len(db_section):
-                        print(f"Key length {key_len} exceeds remaining bytes")
-                        break
+                    # if i + key_len > len(db_section):
+                    #     print(f"Key length {key_len} exceeds remaining bytes")
+                    #     break
                     
                     # Extract key
                     key = db_section[i:i+key_len].decode('utf-8', errors='replace')
@@ -120,16 +136,16 @@ class RedisServer:
                     value_len = db_section[i]
                     i += 1
                     
-                    if i + value_len > len(db_section):
-                        print(f"Value length {value_len} exceeds remaining bytes")
-                        break
+                    # if i + value_len > len(db_section):
+                    #     print(f"Value length {value_len} exceeds remaining bytes")
+                    #     break
                     
                     # Extract value
                     value = db_section[i:i+value_len].decode('utf-8', errors='replace')
                     i += value_len
                     
-                    print(f"Extracted key='{key}', value='{value}'")
-                    keys_values.append((key, value))
+                    print(f"Extracted key='{key}', value='{value}' {expiry=}")
+                    keys_values.append((key, value, int(expiry)))
                     
                 except Exception as e:
                     print(f"Error parsing key-value pair at position {i}: {e}")
@@ -326,8 +342,8 @@ class RedisCommandHandler:
             return resp.encode('utf-8')
             
         val, expiry = self.server.cache.get(key, (None, 0))
-        current_time = datetime.now(timezone.utc).timestamp()
-        print(f'get expiry {expiry} {current_time}')
+        current_time = int(datetime.now(timezone.utc).timestamp())
+        print(f'get expiry {expiry=} {current_time=}')
         
         # If expiry is set (not 0) and current time is greater than expiry
         if expiry and current_time > expiry:
@@ -373,5 +389,4 @@ def main():
 
 
 if __name__ == "__main__":
-    print("Inside main")
     main()
