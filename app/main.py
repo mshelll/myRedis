@@ -4,13 +4,16 @@ import threading
 from datetime import datetime, timezone
 import argparse
 
+# Global constants
+CRLF = '\r\n'  # CarriageReturn \r followed by LineFeed \n
+
+
 class RedisServer:
     """Main Redis server class that manages configuration and server lifecycle"""
 
     def __init__(self):
         self.config = {}
         self.cache = {}
-        self.CRLF = '\r\n'  # CarriageReturn \r followed by LineFeed \n
         self.command_handler = RedisCommandHandler(self)
     
     def initialize(self, args=None):
@@ -46,9 +49,10 @@ class RedisServer:
             keys_values = self.read_keys_from_rdb()
             if keys_values:
                 for key, value in keys_values:
-                    # Store with no expiry (0)
-                    self.cache[key] = (value, 0)
-                print(f"Loaded {len(keys_values)} keys from RDB file")
+                    if key:  # Skip empty keys
+                        # Store with no expiry (0)
+                        self.cache[key] = (value, 0)
+                print(f"Loaded {len(self.cache)} keys from RDB file")
         except Exception as e:
             print(f"Error loading cache from RDB: {e}")
 
@@ -59,70 +63,87 @@ class RedisServer:
             list: List of (key, value) tuples
         """
         try:
-            fd = open(self.config['dbpath'], 'rb')  # Open in binary mode
-            content = fd.read()
-            fd.close()
-        
+            with open(self.config['dbpath'], 'rb') as fd:
+                content = fd.read()
+            
             # Find DB section (between FB and FF markers)
             start_marker = b'\xfb'
             end_marker = b'\xff'
-        
+            
             start_idx = content.find(start_marker)
             end_idx = content.find(end_marker, start_idx) if start_idx != -1 else -1
-        
+            
             if start_idx == -1 or end_idx == -1:
                 print("Could not find database section in RDB file")
                 return []
-
+            
+            # Extract DB section (skip FB marker but include everything up to FF marker)
             db_section = content[start_idx+1:end_idx]
-        
-            # Basic format validation
-            if len(db_section) < 3:
-                print("Database section too small")
-                return []
-
-            # Skip metadata bytes
-            nkeys, nexpiry, encoding = db_section[0], db_section[1], db_section[2]
-        
-            keys_values = []
+            
+            # First byte represents the number of keys
+            num_keys = db_section[0]
+            print(f"RDB header indicates {num_keys} keys")
+            
+            # Skip the first 3 bytes (metadata)
             i = 3
+            keys_values = []
+            
+            # Debug: print hex representation of the db section
+            print(f"DB section length: {len(db_section)} bytes")
+            print(f"DB section hex: {db_section.hex()}")
+            
+            # Parse key-value pairs from the RDB file
+            # Format: [key_len][key][value_len][value]...
             while i < len(db_section):
                 try:
-                    # Read key
+                    # Get key length
                     key_len = db_section[i]
                     i += 1
+                    
+                    if key_len == 0:  # Skip null keys
+                        print("Skipping zero-length key")
+                        continue
+                    
                     if i + key_len > len(db_section):
                         print(f"Key length {key_len} exceeds remaining bytes")
                         break
-                
+                    
+                    # Extract key
                     key = db_section[i:i+key_len].decode('utf-8', errors='replace')
                     i += key_len
-                
-                    # Read value
+                    
+                    # Get value length
                     if i >= len(db_section):
-                        print("Unexpected end of data while reading value length")
+                        print("End of data reached unexpectedly")
                         break
                     
-                    val_len = db_section[i]
+                    value_len = db_section[i]
                     i += 1
-                    if i + val_len > len(db_section):
-                        print(f"Value length {val_len} exceeds remaining bytes")
+                    
+                    if i + value_len > len(db_section):
+                        print(f"Value length {value_len} exceeds remaining bytes")
                         break
                     
-                    value = db_section[i:i+val_len].decode('utf-8', errors='replace')
-                    i += val_len
-                
+                    # Extract value
+                    value = db_section[i:i+value_len].decode('utf-8', errors='replace')
+                    i += value_len
+                    
+                    print(f"Extracted key='{key}', value='{value}'")
                     keys_values.append((key, value))
+                    
                 except Exception as e:
-                    print(f"Error parsing key-value pair: {e}")
-                    break
-        
+                    print(f"Error parsing key-value pair at position {i}: {e}")
+                    # Try to continue by advancing one byte
+                    i += 1
+            
+            print(f"Successfully extracted {len(keys_values)} key-value pairs: {keys_values}")
             return keys_values
-        
+            
         except Exception as e:
-            print(f"Error reading keys from RDB file: {e}")
+            print(f"Error reading RDB file: {e}")
+            import traceback
+            traceback.print_exc()
             return []
-
     @staticmethod
     def parse_args():
         """Parse command line arguments"""
@@ -190,7 +211,7 @@ class ClientHandler:
                     print(elems)
                     
                     if len(elems) < 3:
-                        self.connection.sendall(b'-ERR invalid command format\r\n')
+                        self.connection.sendall(b'-ERR invalid command format' + CRLF.encode())
                         continue
                         
                     cmd = elems[2].lower()
@@ -199,10 +220,10 @@ class ClientHandler:
                     resp = self.server.command_handler.process_command(cmd, elems[2:])
                     self.connection.sendall(resp)
                 except UnicodeDecodeError:
-                    self.connection.sendall(b'-ERR invalid encoding\r\n')
+                    self.connection.sendall(b'-ERR invalid encoding' + CRLF.encode())
                 except Exception as e:
                     print(f"Command processing error: {e}")
-                    self.connection.sendall(b'-ERR internal server error\r\n')
+                    self.connection.sendall(b'-ERR internal server error' + CRLF.encode())
 
         except Exception as e:
             print(f"Connection error: {e}")
@@ -230,63 +251,54 @@ class RedisCommandHandler:
         """Process a command and return the response"""
         handler = self.cmd_handlers.get(cmd)
         if not handler:
-            return b'-ERR unknown command\r\n'
+            return f'-ERR unknown command{CRLF}'.encode()
         return handler(args)
-    
+
     def handle_keys(self, elems):
-        """Handle KEYS command - retrieve keys from RDB file"""
+        """
+        Handle KEYS command - return keys from the cache that was loaded from RDB
+        
+        This implementation:
+        1. Uses the server's cache directly rather than re-reading the RDB file
+        2. Properly supports returning multiple keys
+        3. Handles pattern matching if implemented in the future
+        """
         try:
-            fd = open(self.server.config['dbpath'], 'rb')  # Open in binary mode
-            content = fd.read()
-            fd.close()
+            # Get all keys from the server's cache
+            keys = list(self.server.cache.keys())
+            print(f'keys={keys}')
+            print(f" {self.server.cache}")
             
-            print(f"content={content!r}")
+            # Filter out empty keys
+            keys = [k for k in keys if k]
             
-            # Find DB section (between FB and FF markers)
-            start_marker = b'\xfb'
-            end_marker = b'\xff'
+            if not keys:
+                # Return empty array if no keys found
+                return f'*0{CRLF}'.encode()
             
-            start_idx = content.find(start_marker)
-            end_idx = content.find(end_marker, start_idx) if start_idx != -1 else -1
+            # Format response with all keys according to Redis protocol
+            # Start with array length
+            resp = f'*{len(keys)}{CRLF}'
             
-            print(f"db section {start_idx} {end_idx} {content[start_idx+1:end_idx] if start_idx != -1 and end_idx != -1 else b''}")
-            print("Find DB section Its between fb and ff")
-
-            db_section = content[start_idx+1:end_idx]
-
-            nkeys, nexpiry, encoding = db_section[0], db_section[1], db_section[2]
-
-            keys = []
-            i = 3
-            while i < len(db_section):
-                key_len = db_section[i]
-                print(f'{key_len=}')
-                key = db_section[i+1:i+key_len+1]
-                print(f'{key=}')
-                i += key_len+1
-                val_len = db_section[i]
-                print(f'{val_len=}')
-                val = db_section[i+1:i+val_len+1]
-                print(f'{val=}')
-                keys += [key.decode()]
-                i += val_len+1
-
-            resp = f'*1{self.server.CRLF}${len(keys[0])}{self.server.CRLF}{keys[0]}{self.server.CRLF}'
-
-            return resp.encode()
+            # Add each key as a bulk string
+            for key in keys:
+                resp += f'${len(key)}{CRLF}{key}{CRLF}'
+            
+            print(f"Returning {len(keys)} keys")
+            return resp.encode('utf-8')
             
         except Exception as e:
-            print(f"Error reading database file: {e}")
-            return b'-ERR Failed to read database file\r\n'
-    
+            print(f"Error handling KEYS command: {e}")
+            return f'-ERR internal error{CRLF}'.encode()
+
     def handle_ping(self, elems):
         """Handle PING command"""
-        return b'+PONG\r\n'
+        return f'+PONG{CRLF}'.encode()
     
     def handle_echo(self, elems):
         """Handle ECHO command"""
         inp = elems[-1]
-        return b'+' + inp.encode('utf-8') + b'\r\n'
+        return f'+{inp}{CRLF}'.encode()
     
     def handle_set(self, elems):
         """Handle SET command - store a key-value pair with optional expiry"""
@@ -302,15 +314,15 @@ class RedisCommandHandler:
             print(f'expiry {expiry}')
 
         self.server.cache[key] = (value, expiry)
-        return b'+OK\r\n'
-    
+        return f'+OK{CRLF}'.encode()
+
     def handle_get(self, elems):
         """Handle GET command - retrieve a value by key"""
         print(f'get {elems=}')
         key = elems[-1]
         
         if key not in self.server.cache:
-            resp = '$-1\r\n'
+            resp = f'$-1{CRLF}'
             return resp.encode('utf-8')
             
         val, expiry = self.server.cache.get(key, (None, 0))
@@ -320,13 +332,13 @@ class RedisCommandHandler:
         # If expiry is set (not 0) and current time is greater than expiry
         if expiry and current_time > expiry:
             del self.server.cache[key]
-            resp = '$-1\r\n'
+            resp = f'$-1{CRLF}'
             return resp.encode('utf-8')
 
         if val:
-            resp = f'${len(val)}{self.server.CRLF}{val}{self.server.CRLF}'
+            resp = f'${len(val)}{CRLF}{val}{CRLF}'
         else:
-            resp = '$-1\r\n'
+            resp = f'$-1{CRLF}'
 
         print(resp)
         return resp.encode('utf-8')
@@ -341,15 +353,15 @@ class RedisCommandHandler:
             val = self.server.config.get(key, '')
 
             if val:
-                resp = f'*2{self.server.CRLF}${len(key)}{self.server.CRLF}{key}{self.server.CRLF}${len(val)}{self.server.CRLF}{val}{self.server.CRLF}'
+                resp = f'*2{CRLF}${len(key)}{CRLF}{key}{CRLF}${len(val)}{CRLF}{val}{CRLF}'
             else:
-                resp = '$-1\r\n'
+                resp = f'$-1{CRLF}'
 
             print(resp.encode('utf-8'))
             return resp.encode('utf-8')
         
         # Default response for unknown config operations
-        return b'-ERR unknown config operation\r\n'
+        return f'-ERR unknown config operation{CRLF}'.encode()
 
 
 def main():
