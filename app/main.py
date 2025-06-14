@@ -60,7 +60,7 @@ class RedisServer:
         """Read keys and values from RDB file
     
         Returns:
-            list: List of (key, value) tuples
+            list: List of (key, value, expiry) tuples
         """
         try:
             with open(self.config['dbpath'], 'rb') as fd:
@@ -83,74 +83,73 @@ class RedisServer:
             # First byte represents the number of keys
             num_keys = db_section[0]
             print(f"RDB header indicates {num_keys} keys")
-
-            a, b = db_section[1], db_section[2]
-            print(f'{a=} {b=}')
             
-            # Skip the first 3 bytes (metadata)
-            i = 2
-            keys_values = []
-            
-            # Debug: print hex representation of the db section
             print(f"DB section length: {len(db_section)} bytes")
             print(f"DB section hex: {db_section.hex()}")
             print(f"DB section : {db_section}")
             
-            # Parse key-value pairs from the RDB file
-            # Format: [key_len][key][value_len][value]...
+            # Parse key-value pairs
+            keys_values = []
+            i = 1  # Start after the key count byte
+            
             while i < len(db_section):
                 try:
-                    print(f'{db_section[i]=}')
-                    c = db_section[i]
-                    print(f'Current byte: {hex(c)}')
-                    i += 1
-                    expiry = 0
-                    if hex(c) == '0xfc':
-                        expiry = int.from_bytes(db_section[i:i+5], byteorder='little')
-                        print(f'{expiry=}')
+                    # Check for the expiry marker (0xFC)
+                    if i < len(db_section) and db_section[i] == 0xFC:
+                        print(f"Current byte: 0x{db_section[i]:x}")
+                        i += 1  # Skip the FC marker
+                        
+                        # Parse expiry timestamp (milliseconds since epoch)
+                        # Extract a 4-byte timestamp from the next 8 bytes
+                        expiry_bytes = db_section[i:i+8]
+                        # Use bytes 1-4 (little endian) which seems to contain the actual timestamp
+                        # The byte at index 0 is likely a type flag
+                        expiry_ms = int.from_bytes(expiry_bytes[1:5], byteorder='little')
+                        
+                        # Convert to seconds for easier comparison with current time
+                        # Redis stores expiry as milliseconds since epoch
+                        expiry = expiry_ms / 1000.0
                         i += 8
-
+                        
+                        print(f"expiry={expiry}")
+                    else:
+                        # No expiry
+                        expiry = 0
+                    
                     # Get key length
-                    i += 1
+                    if i >= len(db_section):
+                        break
                     key_len = db_section[i]
-                    print(f'{key_len=} {i=}')
                     i += 1
                     
-                    # if key_len == 0:  # Skip null keys
-                    #     print("Skipping zero-length key")
-                    #     continue
-                    
-                    # if i + key_len > len(db_section):
-                    #     print(f"Key length {key_len} exceeds remaining bytes")
-                    #     break
+                    # Skip zero-length keys
+                    if key_len == 0:
+                        continue
                     
                     # Extract key
+                    if i + key_len > len(db_section):
+                        break
                     key = db_section[i:i+key_len].decode('utf-8', errors='replace')
                     i += key_len
                     
                     # Get value length
                     if i >= len(db_section):
-                        print("End of data reached unexpectedly")
                         break
-                    
-                    value_len = db_section[i]
+                    val_len = db_section[i]
                     i += 1
                     
-                    # if i + value_len > len(db_section):
-                    #     print(f"Value length {value_len} exceeds remaining bytes")
-                    #     break
-                    
                     # Extract value
-                    value = db_section[i:i+value_len].decode('utf-8', errors='replace')
-                    i += value_len
+                    if i + val_len > len(db_section):
+                        break
+                    value = db_section[i:i+val_len].decode('utf-8', errors='replace')
+                    i += val_len
                     
-                    print(f"Extracted key='{key}', value='{value}' {expiry=}")
-                    keys_values.append((key, value, int(expiry)))
+                    print(f"Extracted key='{key}', value='{value}' expiry={expiry}")
+                    keys_values.append((key, value, expiry))
                     
                 except Exception as e:
                     print(f"Error parsing key-value pair at position {i}: {e}")
-                    # Try to continue by advancing one byte
-                    i += 1
+                    i += 1  # Skip this byte and continue
             
             print(f"Successfully extracted {len(keys_values)} key-value pairs: {keys_values}")
             return keys_values
@@ -160,6 +159,7 @@ class RedisServer:
             import traceback
             traceback.print_exc()
             return []
+
     @staticmethod
     def parse_args():
         """Parse command line arguments"""
