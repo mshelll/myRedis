@@ -96,7 +96,7 @@ class RedisServer:
                 try:
                     print(f'{db_section[i]=}')
                     # Check for the expiry marker (0xFC)
-
+                    expiry = None
                     if i < len(db_section) and db_section[i] == 0xFC:
                         print(f"Current byte: 0x{db_section[i]:x}")
                         i += 1  # Skip the FC marker
@@ -343,7 +343,7 @@ class RedisCommandHandler:
             resp = f'$-1{CRLF}'
             return resp.encode('utf-8')
             
-        val, expiry = self.server.cache.get(key, (None, 0))
+        val, expiry = self.server.cache.get(key, (None, None))
         current_time = int(datetime.now(timezone.utc).timestamp()) * 1000
         print(f'get expiry {expiry=} {current_time=}')
         
