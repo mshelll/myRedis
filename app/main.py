@@ -105,11 +105,11 @@ class RedisServer:
                         expiry_bytes = db_section[i:i+8]
                         # Use bytes 1-4 (little endian) which seems to contain the actual timestamp
                         # The byte at index 0 is likely a type flag
-                        expiry_ms = int.from_bytes(expiry_bytes[1:5], byteorder='little')
+                        expiry_ms = int.from_bytes(expiry_bytes, byteorder='little')
                         
                         # Convert to seconds for easier comparison with current time
                         # Redis stores expiry as milliseconds since epoch
-                        expiry = expiry_ms
+                        expiry = str(expiry_ms)
                         i += 8
                         
                         print(f"expiry={expiry}")
@@ -347,7 +347,7 @@ class RedisCommandHandler:
         print(f'get expiry {expiry=} {current_time=}')
         
         # If expiry is set (not 0) and current time is greater than expiry
-        if expiry and current_time > expiry:
+        if expiry and current_time > int(expiry):
             del self.server.cache[key]
             resp = f'$-1{CRLF}'
             return resp.encode('utf-8')
