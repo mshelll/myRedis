@@ -343,7 +343,7 @@ class RedisCommandHandler:
             return resp.encode('utf-8')
             
         val, expiry = self.server.cache.get(key, (None, 0))
-        current_time = int(datetime.now(timezone.utc).timestamp())
+        current_time = int(datetime.now(timezone.utc).timestamp()) * 1000
         print(f'get expiry {expiry=} {current_time=}')
         
         # If expiry is set (not 0) and current time is greater than expiry
