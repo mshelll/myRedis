@@ -90,10 +90,11 @@ class RedisServer:
             
             # Parse key-value pairs
             keys_values = []
-            i = 1  # Start after the key count byte
+            i = 2  # Start after the key count byte
             
             while i < len(db_section):
                 try:
+                    print(f'{db_section[i]=}')
                     # Check for the expiry marker (0xFC)
                     if i < len(db_section) and db_section[i] == 0xFC:
                         print(f"Current byte: 0x{db_section[i]:x}")
@@ -108,13 +109,13 @@ class RedisServer:
                         
                         # Convert to seconds for easier comparison with current time
                         # Redis stores expiry as milliseconds since epoch
-                        expiry = expiry_ms / 1000.0
+                        expiry = expiry_ms
                         i += 8
                         
                         print(f"expiry={expiry}")
-                    else:
-                        # No expiry
-                        expiry = 0
+                    # else:
+                    #     # No expiry
+                    #     expiry = 0
                     
                     # Get key length
                     if i >= len(db_section):
