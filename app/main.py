@@ -333,7 +333,7 @@ class RedisCommandHandler:
         if len(elems) > 5 and elems[6] == 'px':
             px = int(elems[8])
             # Calculate expiry in milliseconds
-            expiry = datetime.now(timezone.utc).timestamp() *1000 + px
+            expiry = time.time()*1000 + px
             print(f'expiry {expiry}')
 
         self.server.cache[key] = (value, expiry)
