@@ -3,6 +3,7 @@ import socket  # noqa: F401
 import threading
 from datetime import datetime, timezone
 import argparse
+import time
 
 # Global constants
 CRLF = '\r\n'  # CarriageReturn \r followed by LineFeed \n
@@ -96,7 +97,7 @@ class RedisServer:
                 try:
                     print(f'{db_section[i]=}')
                     # Check for the expiry marker (0xFC)
-                    expiry = None
+
                     if i < len(db_section) and db_section[i] == 0xFC:
                         print(f"Current byte: 0x{db_section[i]:x}")
                         i += 1  # Skip the FC marker
@@ -146,10 +147,14 @@ class RedisServer:
                     value = db_section[i:i+val_len].decode('utf-8', errors='replace')
                     i += val_len
                     
+                    if 'expiry' not in locals():
+                        expiry = None
                     print(f"Extracted key='{key}', value='{value}' expiry={expiry}")
                     keys_values.append((key, value, expiry))
                     
                 except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     print(f"Error parsing key-value pair at position {i}: {e}")
                     i += 1  # Skip this byte and continue
             
@@ -324,11 +329,11 @@ class RedisCommandHandler:
         key = elems[2]
         value = elems[4]
 
-        expiry = 0
+        expiry = None
         if len(elems) > 5 and elems[6] == 'px':
             px = int(elems[8])
             # Calculate expiry in milliseconds
-            expiry = datetime.now(timezone.utc).timestamp() + (px / 1000.0)
+            expiry = datetime.now(timezone.utc).timestamp() *1000 + px
             print(f'expiry {expiry}')
 
         self.server.cache[key] = (value, expiry)
@@ -337,6 +342,7 @@ class RedisCommandHandler:
     def handle_get(self, elems):
         """Handle GET command - retrieve a value by key"""
         print(f'get {elems=}')
+        print(f'{self.server.cache=}')
         key = elems[-1]
         
         if key not in self.server.cache:
@@ -344,7 +350,7 @@ class RedisCommandHandler:
             return resp.encode('utf-8')
             
         val, expiry = self.server.cache.get(key, (None, None))
-        current_time = int(datetime.now(timezone.utc).timestamp()) * 1000
+        current_time = time.time() * 1000
         print(f'get expiry {expiry=} {current_time=}')
         
         # If expiry is set (not 0) and current time is greater than expiry
