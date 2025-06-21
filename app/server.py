@@ -57,9 +57,31 @@ class RedisServer:
         except Exception as e:
             print(f"Error loading cache from RDB: {e}")
 
+    def send_ping_to_master(self):
+        """If this server is a slave, connect to the master and send a PING command."""
+        if self.config.get('role') != 'slave':
+            return
+        host = self.config.get('replica_host')
+        port = self.config.get('replica_port')
+        if not host or not port:
+            print("Replica host/port not set, cannot ping master.")
+            return
+        try:
+            with socket.create_connection((host, port), timeout=2) as sock:
+                # Send RESP2 PING command: *1\r\n$4\r\nPING\r\n
+                ping_cmd = b'*1\r\n$4\r\nPING\r\n'
+                sock.sendall(ping_cmd)
+                resp = sock.recv(1024)
+                print(f"Pinged master at {host}:{port}, got response: {resp!r}")
+        except Exception as e:
+            print(f"Failed to ping master at {host}:{port}: {e}")
+
     def start(self):
         """Start the Redis server and listen for connections"""
         print("Logs from your program will appear here!")
+
+        # Ping master if this is a slave
+        self.send_ping_to_master()
 
         # Get port from configuration
         port = self.config.get('port', 6379)
