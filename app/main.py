@@ -12,6 +12,8 @@ def parse_args():
                         help='Filename for the Redis database (default: dump.rdb)')
     parser.add_argument('--port', type=int, default=DEFAULT_PORT,
                         help=f'Port to listen on (default: {DEFAULT_PORT})')
+    parser.add_argument('--replicaof', type=str,
+                        help='Replicaof host and port as "HOST PORT" (if set, role is slave)')
 
     return parser.parse_args()
 

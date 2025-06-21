@@ -20,11 +20,10 @@ class RedisCommandHandler:
         }
 
     def handle_info(self, elems: list) -> bytes:
-        print(f'set {elems=}')
-        request = elems[-1]
-        if request == 'replication':
-            resp = f'$11{CRLF}role:master{CRLF}'
-            return resp.encode()
+        """Handle INFO command - return server role info"""
+        role = self.server.config.get('role', 'master')
+        content = f'role:{role}'
+        return f'${len(content)}{CRLF}{content}{CRLF}'.encode('utf-8')
 
     def process_command(self, cmd: str, args: list) -> bytes:
         """Process a command and return the response"""
