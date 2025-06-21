@@ -20,9 +20,15 @@ class RedisCommandHandler:
         }
 
     def handle_info(self, elems: list) -> bytes:
-        """Handle INFO command - return server role info"""
-        role = self.server.config.get('role', 'master')
-        content = f'role:{role}'
+        """Handle INFO command - return server replication info"""
+        info = self.server.replication_info
+        lines = [
+            f'role:{info.role}',
+            f'connected_slaves:{info.connected_slaves}',
+            f'master_replid:{info.master_replid}',
+            f'master_repl_offset:{info.master_repl_offset}'
+        ]
+        content = '\r\n'.join(lines) + '\r\n'
         return f'${len(content)}{CRLF}{content}{CRLF}'.encode('utf-8')
 
     def process_command(self, cmd: str, args: list) -> bytes:

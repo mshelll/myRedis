@@ -1,12 +1,24 @@
 import socket
 import threading
 from typing import Dict, Any
+import random
 
 from .config import ServerConfig
 from .rdb_parser import RDBParser
 from .command_handler import RedisCommandHandler
 from .client_handler import ClientHandler
 
+class ReplicationInfo:
+    def __init__(self, role: str = 'master', connected_slaves: int = 0, master_replid: str = None, master_repl_offset: int = 0):
+        self.role = role
+        self.connected_slaves = connected_slaves
+        self.master_replid = master_replid or self.generate_replid()
+        self.master_repl_offset = master_repl_offset
+
+    @staticmethod
+    def generate_replid():
+        # Generate a random 40-character hex string
+        return ''.join(random.choices('0123456789abcdef', k=40))
 
 class RedisServer:
     """Main Redis server class that manages configuration and server lifecycle"""
@@ -16,11 +28,18 @@ class RedisServer:
         self.cache: Dict[str, tuple] = {}
         self.config_manager = ServerConfig()
         self.command_handler = RedisCommandHandler(self)
+        self.replication_info = None
     
     def initialize(self, args=None):
         """Initialize server configuration from command line args"""
         self.config = self.config_manager.initialize(args)
-        
+        # Set up replication info
+        self.replication_info = ReplicationInfo(
+            role=self.config.get('role', 'master'),
+            connected_slaves=0,
+            master_replid=None,
+            master_repl_offset=0
+        )
         # Initialize cache from RDB file if it exists
         self.load_cache_from_rdb()
 
