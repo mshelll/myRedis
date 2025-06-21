@@ -58,11 +58,12 @@ class RedisServer:
             print(f"Error loading cache from RDB: {e}")
 
     def send_ping_to_master(self):
-        """If this server is a slave, connect to the master and send a PING command."""
+        """If this server is a slave, connect to the master and send a PING command, then REPLCONF commands."""
         if self.config.get('role') != 'slave':
             return
         host = self.config.get('replica_host')
         port = self.config.get('replica_port')
+        my_port = self.config.get('port')
         if not host or not port:
             print("Replica host/port not set, cannot ping master.")
             return
@@ -73,6 +74,21 @@ class RedisServer:
                 sock.sendall(ping_cmd)
                 resp = sock.recv(1024)
                 print(f"Pinged master at {host}:{port}, got response: {resp!r}")
+
+                # Send REPLCONF listening-port <PORT>
+                replconf_port = (
+                    f"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +
+                    f"{len(str(my_port))}\r\n{my_port}\r\n"
+                ).encode()
+                sock.sendall(replconf_port)
+                resp2 = sock.recv(1024)
+                print(f"Sent REPLCONF listening-port, got response: {resp2!r}")
+
+                # Send REPLCONF capa psync2
+                replconf_capa = b'*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n'
+                sock.sendall(replconf_capa)
+                resp3 = sock.recv(1024)
+                print(f"Sent REPLCONF capa psync2, got response: {resp3!r}")
         except Exception as e:
             print(f"Failed to ping master at {host}:{port}: {e}")
 
