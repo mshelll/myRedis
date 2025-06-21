@@ -16,8 +16,16 @@ class RedisCommandHandler:
             'get': self.handle_get,
             'keys': self.handle_keys,
             'config': self.handle_config,
+            'info': self.handle_info,
         }
-    
+
+    def handle_info(self, elems: list) -> bytes:
+        print(f'set {elems=}')
+        request = elems[-1]
+        if request == 'replication':
+            resp = f'$11{CRLF}role:master{CRLF}'
+            return resp.encode()
+
     def process_command(self, cmd: str, args: list) -> bytes:
         """Process a command and return the response"""
         handler = self.cmd_handlers.get(cmd)
