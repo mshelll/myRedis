@@ -18,6 +18,7 @@ class RedisCommandHandler:
             'config': self.handle_config,
             'info': self.handle_info,
             'replconf': self.handle_replconf,
+            'psync': self.handle_psync,
         }
 
     def handle_info(self, elems: list) -> bytes:
@@ -151,4 +152,11 @@ class RedisCommandHandler:
 
     def handle_replconf(self, elems: list) -> bytes:
         """Handle REPLCONF command (including REPLCONF capa psync2) by responding with +OK"""
-        return f'+OK{CRLF}'.encode() 
+        return f'+OK{CRLF}'.encode()
+
+    def handle_psync(self, elems: list) -> bytes:
+        """Handle PSYNC command: respond with +FULLRESYNC <REPL_ID> 0 if master."""
+        if self.server.replication_info.role == 'master':
+            replid = self.server.replication_info.master_replid
+            return f'+FULLRESYNC {replid} 0{CRLF}'.encode()
+        return f'-ERR PSYNC not supported in this role{CRLF}'.encode() 
