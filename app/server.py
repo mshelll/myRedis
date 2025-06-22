@@ -7,6 +7,7 @@ from .config import ServerConfig
 from .rdb_parser import RDBParser
 from .command_handler import RedisCommandHandler
 from .client_handler import ClientHandler
+from .constants import CRLF
 
 class ReplicationInfo:
     def __init__(self, role: str = 'master', connected_slaves: int = 0, master_replid: str = None, master_repl_offset: int = 0):
@@ -69,30 +70,30 @@ class RedisServer:
             return
         try:
             with socket.create_connection((host, port), timeout=2) as sock:
-                # Send RESP2 PING command: *1\r\n$4\r\nPING\r\n
-                ping_cmd = b'*1\r\n$4\r\nPING\r\n'
+                # Send RESP2 PING command: *1{CRLF}$4{CRLF}PING{CRLF}
+                ping_cmd = f'*1{CRLF}$4{CRLF}PING{CRLF}'.encode()
                 sock.sendall(ping_cmd)
                 resp = sock.recv(1024)
                 print(f"Pinged master at {host}:{port}, got response: {resp!r}")
 
                 # Send REPLCONF listening-port <PORT>
                 replconf_port = (
-                    f"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +
-                    f"{len(str(my_port))}\r\n{my_port}\r\n"
+                    f"*3{CRLF}$8{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}$" +
+                    f"{len(str(my_port))}{CRLF}{my_port}{CRLF}"
                 ).encode()
                 sock.sendall(replconf_port)
                 resp2 = sock.recv(1024)
                 print(f"Sent REPLCONF listening-port, got response: {resp2!r}")
 
                 # Send REPLCONF capa psync2
-                replconf_capa = b'*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n'
+                replconf_capa = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}'.encode()
                 sock.sendall(replconf_capa)
                 resp3 = sock.recv(1024)
                 print(f"Sent REPLCONF capa psync2, got response: {resp3!r}")
 
                 # Send PSYNC ? -1 (always use ? and -1 for initial handshake)
                 psync_cmd = (
-                    f"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
+                    f"*3{CRLF}$5{CRLF}PSYNC{CRLF}$1{CRLF}?{CRLF}$2{CRLF}-1{CRLF}"
                 ).encode()
                 sock.sendall(psync_cmd)
                 resp4 = sock.recv(1024)
@@ -113,23 +114,23 @@ class RedisServer:
             return
         try:
             with socket.create_connection((host, port), timeout=2) as sock:
-                # Send RESP2 PING command: *1\r\n$4\r\nPING\r\n
-                ping_cmd = b'*1\r\n$4\r\nPING\r\n'
+                # Send RESP2 PING command: *1{CRLF}$4{CRLF}PING{CRLF}
+                ping_cmd = f'*1{CRLF}$4{CRLF}PING{CRLF}'.encode()
                 sock.sendall(ping_cmd)
                 resp = sock.recv(1024)
                 print(f"Pinged slave at {host}:{port}, got response: {resp!r}")
 
                 # Send REPLCONF listening-port <PORT>
                 replconf_port = (
-                    f"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +
-                    f"{len(str(my_port))}\r\n{my_port}\r\n"
+                    f"*3{CRLF}$8{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}$" +
+                    f"{len(str(my_port))}{CRLF}{my_port}{CRLF}"
                 ).encode()
                 sock.sendall(replconf_port)
                 resp2 = sock.recv(1024)
                 print(f"Sent REPLCONF listening-port to slave, got response: {resp2!r}")
 
                 # Send REPLCONF capa psync2
-                replconf_capa = b'*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n'
+                replconf_capa = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}'.encode()
                 sock.sendall(replconf_capa)
                 resp3 = sock.recv(1024)
                 print(f"Sent REPLCONF capa psync2 to slave, got response: {resp3!r}")
