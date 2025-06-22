@@ -57,7 +57,7 @@ class RedisServer:
         except Exception as e:
             print(f"Error loading cache from RDB: {e}")
 
-    def master_handshake(self):
+    def server_to_master_handshake(self):
         """If this server is a slave, connect to the master and perform the handshake: PING, REPLCONF, and PSYNC commands."""
         if self.config.get('role') != 'slave':
             return
@@ -101,7 +101,7 @@ class RedisServer:
         except Exception as e:
             print(f"Failed to handshake with master at {host}:{port}: {e}")
 
-    def slave_handshake(self):
+    def server_to_slave_handshake(self):
         """If this server is a master and has a replica configured, connect to the slave and perform the handshake: PING, REPLCONF, and REPLCONF capa psync2 commands."""
         if self.config.get('role') != 'master':
             return
@@ -142,10 +142,10 @@ class RedisServer:
         print("Logs from your program will appear here!")
 
         # Ping master if this is a slave
-        self.master_handshake()
+        self.server_to_master_handshake()
         # If this is a master and has a replica configured, handshake with slave
         if self.config.get('role') == 'master' and self.config.get('replica_host') and self.config.get('replica_port'):
-            self.slave_handshake()
+            self.server_to_slave_handshake()
 
         # Get port from configuration
         port = self.config.get('port', 6379)
