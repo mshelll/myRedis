@@ -17,6 +17,7 @@ class RedisCommandHandler:
             'keys': self.handle_keys,
             'config': self.handle_config,
             'info': self.handle_info,
+            'replconf': self.handle_replconf,
         }
 
     def handle_info(self, elems: list) -> bytes:
@@ -146,4 +147,8 @@ class RedisCommandHandler:
             return resp.encode('utf-8')
         
         # Default response for unknown config operations
-        return f'-ERR unknown config operation{CRLF}'.encode() 
+        return f'-ERR unknown config operation{CRLF}'.encode()
+
+    def handle_replconf(self, elems: list) -> bytes:
+        """Handle REPLCONF command (including REPLCONF capa psync2) by responding with +OK"""
+        return f'+OK{CRLF}'.encode() 

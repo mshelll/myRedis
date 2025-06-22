@@ -101,12 +101,51 @@ class RedisServer:
         except Exception as e:
             print(f"Failed to handshake with master at {host}:{port}: {e}")
 
+    def slave_handshake(self):
+        """If this server is a master and has a replica configured, connect to the slave and perform the handshake: PING, REPLCONF, and REPLCONF capa psync2 commands."""
+        if self.config.get('role') != 'master':
+            return
+        host = self.config.get('replica_host')
+        port = self.config.get('replica_port')
+        my_port = self.config.get('port')
+        if not host or not port:
+            print("Replica host/port not set, cannot handshake with slave.")
+            return
+        try:
+            with socket.create_connection((host, port), timeout=2) as sock:
+                # Send RESP2 PING command: *1\r\n$4\r\nPING\r\n
+                ping_cmd = b'*1\r\n$4\r\nPING\r\n'
+                sock.sendall(ping_cmd)
+                resp = sock.recv(1024)
+                print(f"Pinged slave at {host}:{port}, got response: {resp!r}")
+
+                # Send REPLCONF listening-port <PORT>
+                replconf_port = (
+                    f"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +
+                    f"{len(str(my_port))}\r\n{my_port}\r\n"
+                ).encode()
+                sock.sendall(replconf_port)
+                resp2 = sock.recv(1024)
+                print(f"Sent REPLCONF listening-port to slave, got response: {resp2!r}")
+
+                # Send REPLCONF capa psync2
+                replconf_capa = b'*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n'
+                sock.sendall(replconf_capa)
+                resp3 = sock.recv(1024)
+                print(f"Sent REPLCONF capa psync2 to slave, got response: {resp3!r}")
+
+        except Exception as e:
+            print(f"Failed to handshake with slave at {host}:{port}: {e}")
+
     def start(self):
         """Start the Redis server and listen for connections"""
         print("Logs from your program will appear here!")
 
         # Ping master if this is a slave
         self.master_handshake()
+        # If this is a master and has a replica configured, handshake with slave
+        if self.config.get('role') == 'master' and self.config.get('replica_host') and self.config.get('replica_port'):
+            self.slave_handshake()
 
         # Get port from configuration
         port = self.config.get('port', 6379)
