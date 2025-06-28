@@ -37,10 +37,16 @@ class ClientHandler:
                     print(f'{cmd=}')
                     
                     resp = self.server.command_handler.process_command(cmd, elems[2:])
-                    self.connection.sendall(resp)
+                    if type(resp) == list:
+                        for r in resp:
+                            self.connection.sendall(r)
+                    else:
+                        self.connection.sendall(resp)
                 except UnicodeDecodeError:
                     self.connection.sendall(b'-ERR invalid encoding' + CRLF.encode())
                 except Exception as e:
+                    import traceback 
+                    traceback.print_exc()
                     print(f"Command processing error: {e}")
                     self.connection.sendall(b'-ERR internal server error' + CRLF.encode())
 
@@ -48,4 +54,4 @@ class ClientHandler:
             print(f"Connection error: {e}")
         finally:
             # Clean up the connection
-            self.connection.close() 
+            self.connection.close()
