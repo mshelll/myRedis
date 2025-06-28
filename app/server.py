@@ -170,86 +170,111 @@ class RedisServer:
         if not self.master_connection or self.config.get('role') != 'slave':
             return
         
-        def parse_resp(data: str) -> list:
-            lines = data.strip().split(CRLF)
-            elems = []
-            i = 0
-            while i < len(lines):
-                line = lines[i]
-                if line.startswith('*'):
-                    count = int(line[1:])
-                    i += 1
-                    for _ in range(count):
-                        if i < len(lines) and lines[i].startswith('$'):
-                            length = int(lines[i][1:])
-                            i += 1
-                            if i < len(lines):
-                                elems.append(lines[i])
-                                i += 1
-                        else:
-                            if i < len(lines):
-                                elems.append(lines[i])
-                                i += 1
-                elif line.startswith('$'):
-                    length = int(line[1:])
-                    i += 1
-                    if i < len(lines):
-                        elems.append(lines[i])
-                        i += 1
-                else:
-                    elems.append(line)
-                    i += 1
-            return elems
+        def extract_complete_resp_message(buffer):
+            """Extract one complete RESP message from buffer"""
+            try:
+                text = buffer.decode('utf-8')
+            except UnicodeDecodeError:
+                return None
+            
+            if not text.startswith('*'):
+                return None
+            
+            # Find the array header
+            header_end = text.find('\r\n')
+            if header_end == -1:
+                return None
+            
+            try:
+                array_count = int(text[1:header_end])
+            except ValueError:
+                return None
+            
+            # Count lines to see if we have a complete message
+            lines = text.split('\r\n')
+            expected_lines = 1 + array_count * 2  # header + (length + value) pairs
+            
+            if len(lines) < expected_lines:
+                return None
+            
+            # Extract the complete message
+            complete_lines = lines[:expected_lines]
+            complete_message = '\r\n'.join(complete_lines) + '\r\n'
+            
+            return complete_message.encode()
         
         try:
             buffer = b''
             while True:
-                # Read propagated commands from master
                 data = self.master_connection.recv(1024)
                 if not data:
                     print("Master connection closed")
                     break
+                
                 buffer += data
+                
+                # Process complete commands from buffer
                 while True:
-                    # Try to decode as utf-8 and parse RESP
-                    try:
-                        text = buffer.decode('utf-8')
-                    except UnicodeDecodeError:
+                    complete_message = extract_complete_resp_message(buffer)
+                    if not complete_message:
                         break  # Wait for more data
-                    if not text.startswith('*'):
-                        buffer = b''
-                        break
-                    # Find the first CRLF to get array header
-                    arr_header_end = text.find(CRLF)
-                    if arr_header_end == -1:
-                        break
-                    arr_header = text[:arr_header_end]
-                    try:
-                        arr_count = int(arr_header[1:])
-                    except Exception:
-                        buffer = b''
-                        break
-                    # Now, parse the rest
-                    lines = text.split(CRLF)
-                    if len(lines) < 2 + arr_count * 2:
-                        break  # Not enough data yet
-                    # Try to parse one array
-                    arr_lines = lines[:1 + arr_count * 2]
-                    arr_block = CRLF.join(arr_lines)
-                    elems = parse_resp(arr_block)
+                    
+                    # Reuse the existing parsing pattern!
+                    elems = self.parse_resp(complete_message.decode('utf-8'))
                     print(f"Parsed propagated elements: {elems}")
+                    
+                    # Apply the command (reuse command handler logic)
                     if elems and elems[0].lower() == 'set' and len(elems) >= 3:
                         key = elems[1]
                         value = elems[2]
                         self.storage.set(key, value)
                         print(f"Applied propagated SET: {key} = {value}")
-                    # Remove processed block from buffer
-                    processed_len = len(CRLF.join(arr_lines)) + len(CRLF)
-                    buffer = buffer[processed_len:]
-                    if not buffer:
-                        break
+                    
+                    # Remove processed message from buffer
+                    buffer = buffer[len(complete_message):]
+                    
         except Exception as e:
             print(f"Error handling master propagation: {e}")
+    
+    def parse_resp(self, data: str) -> list:
+        """Parse RESP (Redis Serialization Protocol) data - reused from client handler"""
+        lines = data.strip().split('\r\n')
+        elems = []
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            if line.startswith('*'):
+                # Array
+                count = int(line[1:])
+                i += 1
+                for _ in range(count):
+                    if i < len(lines) and lines[i].startswith('$'):
+                        # Bulk string
+                        length = int(lines[i][1:])
+                        i += 1
+                        if i < len(lines):
+                            elems.append(lines[i])
+                            i += 1
+                    else:
+                        # Simple string
+                        if i < len(lines):
+                            elems.append(lines[i])
+                            i += 1
+            elif line.startswith('$'):
+                # Bulk string
+                length = int(line[1:])
+                i += 1
+                if i < len(lines):
+                    elems.append(lines[i])
+                    i += 1
+            else:
+                # Simple string
+                elems.append(line)
+                i += 1
+        
+        return elems
 
     def start(self):
         """Start the Redis server and listen for connections"""
