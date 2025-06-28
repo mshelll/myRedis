@@ -171,36 +171,87 @@ class RedisServer:
             return
         
         def extract_complete_resp_message(buffer):
-            """Extract one complete RESP message from buffer"""
+            """
+            Extract one complete RESP (Redis Serialization Protocol) message from buffer.
+            
+            RESP Protocol Overview:
+            - Messages start with a type indicator: *, $, +, -, :
+            - Arrays start with * followed by count: *3\r\n
+            - Bulk strings start with $ followed by length: $4\r\n
+            - Simple strings start with +: +OK\r\n
+            - Errors start with -: -ERR\r\n
+            - Integers start with :: :1000\r\n
+            
+            Example RESP Array Message:
+            *3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\n123\r\n
+            |  |  |  |  |  |  |  |  |  |  |  |  |  |
+            |  |  |  |  |  |  |  |  |  |  |  |  |  +-- value "123"
+            |  |  |  |  |  |  |  |  |  |  |  |  +-- length 3
+            |  |  |  |  |  |  |  |  |  |  |  +-- bulk string indicator $
+            |  |  |  |  |  |  |  |  |  |  +-- value "foo"
+            |  |  |  |  |  |  |  |  |  +-- length 3
+            |  |  |  |  |  |  |  |  +-- bulk string indicator $
+            |  |  |  |  |  |  |  +-- value "SET"
+            |  |  |  |  |  |  +-- length 3
+            |  |  |  |  |  +-- bulk string indicator $
+            |  |  |  |  +-- CRLF line ending
+            |  |  |  +-- count 3 (3 elements in array)
+            |  |  +-- array indicator *
+            |  +-- CRLF line ending
+            +-- array indicator *
+            
+            Args:
+                buffer (bytes): Raw bytes containing RESP data, may be partial
+            
+            Returns:
+                bytes or None: Complete RESP message if found, None if incomplete
+            """
+            # Try to decode buffer as UTF-8 string for parsing
             try:
                 text = buffer.decode('utf-8')
             except UnicodeDecodeError:
+                # If we can't decode, the buffer is incomplete (partial UTF-8 sequence)
                 return None
             
+            # RESP messages must start with a type indicator
             if not text.startswith('*'):
+                # Not an array message, could be other RESP types or invalid data
                 return None
             
-            # Find the array header
+            # Find the first CRLF to extract the array header
+            # Array header format: *<count>\r\n
+            # Example: "*3\r\n" means array with 3 elements
             header_end = text.find('\r\n')
             if header_end == -1:
+                # No CRLF found, header is incomplete
                 return None
             
+            # Extract the count from the header
+            # text[1:] removes the '*' character
+            # text[1:header_end] gives us just the number
             try:
                 array_count = int(text[1:header_end])
             except ValueError:
+                # Header doesn't contain a valid number
                 return None
             
-            # Count lines to see if we have a complete message
+            # Calculate how many lines we need for a complete array message
+            # For each element in the array, we need:
+            # 1. A length line (starts with $)
+            # 2. A value line (the actual data)
+            # So total lines = 1 (header) + array_count * 2
             lines = text.split('\r\n')
             expected_lines = 1 + array_count * 2  # header + (length + value) pairs
             
             if len(lines) < expected_lines:
+                # Not enough lines yet, message is incomplete
                 return None
             
-            # Extract the complete message
+            # Extract the complete message by taking only the lines we need
             complete_lines = lines[:expected_lines]
             complete_message = '\r\n'.join(complete_lines) + '\r\n'
             
+            # Convert back to bytes for consistency with the rest of the system
             return complete_message.encode()
         
         try:
