@@ -5,7 +5,6 @@ import random
 
 from .config import ServerConfig
 from .rdb_parser import RDBParser
-from .command_handler import RedisCommandHandler
 from .client_handler import ClientHandler
 from .replication import Replication
 from .constants import CRLF
@@ -17,7 +16,6 @@ class RedisServer:
         self.config: Dict[str, Any] = {}
         self.cache: Dict[str, tuple] = {}
         self.config_manager = ServerConfig()
-        self.command_handler = RedisCommandHandler(self)
         self.replication = None
     
     def initialize(self, args=None):
