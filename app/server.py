@@ -280,6 +280,13 @@ class RedisServer:
                         value = elems[2]
                         self.storage.set(key, value)
                         print(f"Applied propagated SET: {key} = {value}")
+                    elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
+                        subcommand = elems[1].upper()
+                        if subcommand == 'GETACK':
+                            # Respond with REPLCONF ACK 0
+                            ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
+                            self.master_connection.sendall(ack_response.encode('utf-8'))
+                            print("Sent REPLCONF ACK 0 to master")
                     
                     # Remove processed message from buffer
                     buffer = buffer[len(complete_message):]

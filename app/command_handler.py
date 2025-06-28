@@ -31,7 +31,18 @@ class RedisCommandHandler:
         self.connection.sendall(response)
 
     def handle_replconf(self, elems: list) -> None:
-        """Handle REPLCONF command - respond with +OK"""
+        """Handle REPLCONF command - respond with +OK or handle GETACK"""
+        if len(elems) >= 2:
+            subcommand = elems[1].upper()
+            
+            # Handle GETACK subcommand
+            if subcommand == 'GETACK':
+                # Respond with REPLCONF ACK 0
+                ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
+                self.connection.sendall(ack_response.encode('utf-8'))
+                return
+        
+        # Default response for other REPLCONF commands
         response = RESPProtocol.encode_ok()
         self.connection.sendall(response)
 
