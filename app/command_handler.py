@@ -21,7 +21,7 @@ class RedisCommandHandler:
             'psync': self.handle_psync,
         }
 
-    def handle_info(self, elems: list) -> bytes:
+    def handle_info(self, elems: list, connection) -> None:
         """Handle INFO command - return server replication info"""
         info = self.server.replication_info
         lines = [
@@ -31,16 +31,19 @@ class RedisCommandHandler:
             f'master_repl_offset:{info.master_repl_offset}'
         ]
         content = '\r\n'.join(lines) + '\r\n'
-        return f'${len(content)}{CRLF}{content}{CRLF}'.encode('utf-8')
+        response = f'${len(content)}{CRLF}{content}{CRLF}'.encode('utf-8')
+        connection.sendall(response)
 
-    def process_command(self, cmd: str, args: list) -> bytes:
-        """Process a command and return the response"""
+    def process_command(self, cmd: str, args: list, connection) -> None:
+        """Process a command and send the response via connection"""
         handler = self.cmd_handlers.get(cmd)
         if not handler:
-            return f'-ERR unknown command{CRLF}'.encode()
-        return handler(args)
+            response = f'-ERR unknown command{CRLF}'.encode()
+            connection.sendall(response)
+            return
+        handler(args, connection)
 
-    def handle_keys(self, elems: list) -> bytes:
+    def handle_keys(self, elems: list, connection) -> None:
         """
         Handle KEYS command - return keys from the cache that was loaded from RDB
         
@@ -60,7 +63,9 @@ class RedisCommandHandler:
             
             if not keys:
                 # Return empty array if no keys found
-                return f'*0{CRLF}'.encode()
+                response = f'*0{CRLF}'.encode()
+                connection.sendall(response)
+                return
             
             # Format response with all keys according to Redis protocol
             # Start with array length
@@ -71,22 +76,26 @@ class RedisCommandHandler:
                 resp += f'${len(key)}{CRLF}{key}{CRLF}'
             
             print(f"Returning {len(keys)} keys")
-            return resp.encode('utf-8')
+            response = resp.encode('utf-8')
+            connection.sendall(response)
             
         except Exception as e:
             print(f"Error handling KEYS command: {e}")
-            return f'-ERR internal error{CRLF}'.encode()
+            response = f'-ERR internal error{CRLF}'.encode()
+            connection.sendall(response)
 
-    def handle_ping(self, elems: list) -> bytes:
+    def handle_ping(self, elems: list, connection) -> None:
         """Handle PING command"""
-        return f'+PONG{CRLF}'.encode()
+        response = f'+PONG{CRLF}'.encode()
+        connection.sendall(response)
     
-    def handle_echo(self, elems: list) -> bytes:
+    def handle_echo(self, elems: list, connection) -> None:
         """Handle ECHO command"""
         inp = elems[-1]
-        return f'+{inp}{CRLF}'.encode()
+        response = f'+{inp}{CRLF}'.encode()
+        connection.sendall(response)
     
-    def handle_set(self, elems: list) -> bytes:
+    def handle_set(self, elems: list, connection) -> None:
         """Handle SET command - store a key-value pair with optional expiry"""
         print(f'set {elems=}')
         key = elems[2]
@@ -100,9 +109,14 @@ class RedisCommandHandler:
             print(f'expiry {expiry}')
 
         self.server.cache[key] = (value, expiry)
-        return f'+OK{CRLF}'.encode()
+        response = f'+OK{CRLF}'.encode()
+        connection.sendall(response)
 
-    def handle_get(self, elems: list) -> bytes:
+        # propagate to replicas
+        payload = f'*3{CRLF}$3{CRLF}SET{CRLF}${len(key)}{CRLF}{key}{CRLF}${len(value)}{CRLF}{value}{CRLF}'
+        self.server.propagate_to_replicas(payload.encode('utf-8'))
+
+    def handle_get(self, elems: list, connection) -> None:
         """Handle GET command - retrieve a value by key"""
         print(f'get {elems=}')
         print(f'{self.server.cache=}')
@@ -110,7 +124,8 @@ class RedisCommandHandler:
         
         if key not in self.server.cache:
             resp = f'$-1{CRLF}'
-            return resp.encode('utf-8')
+            connection.sendall(resp.encode('utf-8'))
+            return
             
         val, expiry = self.server.cache.get(key, (None, None))
         current_time = time.time() * 1000
@@ -120,7 +135,8 @@ class RedisCommandHandler:
         if expiry and current_time > int(expiry):
             del self.server.cache[key]
             resp = f'$-1{CRLF}'
-            return resp.encode('utf-8')
+            connection.sendall(resp.encode('utf-8'))
+            return
 
         if val:
             resp = f'${len(val)}{CRLF}{val}{CRLF}'
@@ -128,9 +144,9 @@ class RedisCommandHandler:
             resp = f'$-1{CRLF}'
 
         print(resp)
-        return resp.encode('utf-8')
+        connection.sendall(resp.encode('utf-8'))
     
-    def handle_config(self, elems: list) -> bytes:
+    def handle_config(self, elems: list, connection) -> None:
         """Handle CONFIG command - get or set server configuration"""
         print(f'config {elems=}')
         opr = elems[2]
@@ -145,25 +161,34 @@ class RedisCommandHandler:
                 resp = f'$-1{CRLF}'
 
             print(resp.encode('utf-8'))
-            return resp.encode('utf-8')
+            connection.sendall(resp.encode('utf-8'))
+            return
         
         # Default response for unknown config operations
-        return f'-ERR unknown config operation{CRLF}'.encode()
+        response = f'-ERR unknown config operation{CRLF}'.encode()
+        connection.sendall(response)
 
-    def handle_replconf(self, elems: list) -> bytes:
+    def handle_replconf(self, elems: list, connection) -> None:
         """Handle REPLCONF command (including REPLCONF capa psync2) by responding with +OK"""
-        return f'+OK{CRLF}'.encode()
+        response = f'+OK{CRLF}'.encode()
+        connection.sendall(response)
 
-    def handle_psync(self, elems: list) -> bytes:
+    def handle_psync(self, elems: list, connection) -> None:
         """Handle PSYNC command: respond with +FULLRESYNC <REPL_ID> 0 if master."""
         if self.server.replication_info.role == 'master':
+            # Add this connection as a replica
+            self.server.add_replica_connection(connection)
+            
             replid = self.server.replication_info.master_replid
             resp1 = f'+FULLRESYNC {replid} 0{CRLF}'.encode()
             empty_rdb_hex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
             empty_rdb_bytes = bytes.fromhex(empty_rdb_hex)
             resp2 = f'${len(empty_rdb_bytes)}{CRLF}'.encode() + bytes.fromhex(empty_rdb_hex)
-            return [resp1, resp2]
-            # connection.sendall(b"$" + str(len(bytes.fromhex(empty_rdb_hex))).encode('utf-8') + b"\r\n" + bytes.fromhex(empty_rdb_hex))
-
-            # return f'+FULLRESYNC {replid} 0{CRLF}'.encode()
-        return f'-ERR PSYNC not supported in this role{CRLF}'.encode() 
+            
+            # Send both responses
+            connection.sendall(resp1)
+            connection.sendall(resp2)
+            return
+            
+        response = f'-ERR PSYNC not supported in this role{CRLF}'.encode()
+        connection.sendall(response) 

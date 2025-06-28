@@ -36,12 +36,9 @@ class ClientHandler:
                     cmd = elems[2].lower()
                     print(f'{cmd=}')
                     
-                    resp = self.server.command_handler.process_command(cmd, elems[2:])
-                    if type(resp) == list:
-                        for r in resp:
-                            self.connection.sendall(r)
-                    else:
-                        self.connection.sendall(resp)
+                    # Pass connection to command handler - handlers now send responses directly
+                    self.server.command_handler.process_command(cmd, elems[2:], self.connection)
+                    
                 except UnicodeDecodeError:
                     self.connection.sendall(b'-ERR invalid encoding' + CRLF.encode())
                 except Exception as e:

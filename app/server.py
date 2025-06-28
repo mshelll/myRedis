@@ -15,6 +15,8 @@ class ReplicationInfo:
         self.connected_slaves = connected_slaves
         self.master_replid = master_replid or self.generate_replid()
         self.master_repl_offset = master_repl_offset
+        # Track replica connections
+        self.replica_connections = []
 
     @staticmethod
     def generate_replid():
@@ -102,7 +104,7 @@ class RedisServer:
         except Exception as e:
             print(f"Failed to handshake with master at {host}:{port}: {e}")
 
-    def server_to_slave_handshake(self):
+    def master_to_slave_handshake(self):
         """If this server is a master and has a replica configured, connect to the slave and perform the handshake: PING, REPLCONF, and REPLCONF capa psync2 commands."""
         if self.config.get('role') != 'master':
             return
@@ -146,7 +148,7 @@ class RedisServer:
         self.server_to_master_handshake()
         # If this is a master and has a replica configured, handshake with slave
         if self.config.get('role') == 'master' and self.config.get('replica_host') and self.config.get('replica_port'):
-            self.server_to_slave_handshake()
+            self.master_to_slave_handshake()
 
         # Get port from configuration
         port = self.config.get('port', 6379)
@@ -173,4 +175,27 @@ class RedisServer:
             traceback.print_exc()
             print(e)
         finally:
-            server_socket.close() 
+            server_socket.close()
+
+    def propagate_to_replicas(self, payload: bytes):
+        """Propagate a command payload to all connected replicas"""
+        if self.replication_info.role != 'master':
+            return
+            
+        # Send to all tracked replica connections
+        for replica_conn in self.replication_info.replica_connections:
+            try:
+                replica_conn.sendall(payload)
+                print(f"Propagated command to replica connection")
+            except Exception as e:
+                print(f"Failed to propagate to replica connection: {e}")
+                # Remove failed connection
+                self.replication_info.replica_connections.remove(replica_conn)
+                self.replication_info.connected_slaves = len(self.replication_info.replica_connections)
+
+    def add_replica_connection(self, connection):
+        """Add a replica connection to the tracking list"""
+        if self.replication_info.role == 'master':
+            self.replication_info.replica_connections.append(connection)
+            self.replication_info.connected_slaves = len(self.replication_info.replica_connections)
+            print(f"Added replica connection. Total replicas: {self.replication_info.connected_slaves}") 
