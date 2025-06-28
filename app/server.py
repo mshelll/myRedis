@@ -7,6 +7,7 @@ from .config import ServerConfig
 from .rdb_parser import RDBParser
 from .client_handler import ClientHandler
 from .replication import Replication
+from .storage import Storage
 from .constants import CRLF
 
 class RedisServer:
@@ -14,7 +15,7 @@ class RedisServer:
 
     def __init__(self):
         self.config: Dict[str, Any] = {}
-        self.cache: Dict[str, tuple] = {}
+        self.storage = Storage()
         self.config_manager = ServerConfig()
         self.replication = None
     
@@ -32,16 +33,13 @@ class RedisServer:
         self.load_cache_from_rdb()
 
     def load_cache_from_rdb(self):
-        """Load keys and values from RDB file into cache"""
+        """Load keys and values from RDB file into storage"""
         try:
             rdb_parser = RDBParser(self.config['dbpath'])
             keys_values = rdb_parser.load_keys_from_rdb()
             
             if keys_values:
-                for key, value, expiry in keys_values:
-                    if key:  # Skip empty keys
-                        # Store with no expiry (0)
-                        self.cache[key] = (value, expiry)
+                self.storage.load_from_rdb(keys_values)
         except Exception as e:
             print(f"Error loading cache from RDB: {e}")
 

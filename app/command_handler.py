@@ -1,6 +1,7 @@
 import time
 from typing import Dict, Any, Tuple, Optional
-from .constants import CRLF
+from .constants import CRLF, ERROR_MESSAGES, MILLISECONDS_PER_SECOND, EMPTY_RDB_HEX
+from .resp_protocol import RESPProtocol
 
 
 class RedisCommandHandler:
@@ -31,7 +32,7 @@ class RedisCommandHandler:
 
     def handle_replconf(self, elems: list) -> None:
         """Handle REPLCONF command - respond with +OK"""
-        response = f'+OK{CRLF}'.encode()
+        response = RESPProtocol.encode_ok()
         self.connection.sendall(response)
 
     def handle_psync(self, elems: list) -> None:
@@ -41,39 +42,39 @@ class RedisCommandHandler:
             self.server.replication.add_replica_connection(self.connection)
             
             replid = self.server.replication.master_replid
-            resp1 = f'+FULLRESYNC {replid} 0{CRLF}'.encode()
-            empty_rdb_hex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
-            empty_rdb_bytes = bytes.fromhex(empty_rdb_hex)
-            resp2 = f'${len(empty_rdb_bytes)}{CRLF}'.encode() + bytes.fromhex(empty_rdb_hex)
+            resp1 = RESPProtocol.encode_fullresync(replid, 0)
+            resp2 = RESPProtocol.encode_rdb_file(EMPTY_RDB_HEX)
             
             # Send both responses
             self.connection.sendall(resp1)
             self.connection.sendall(resp2)
             return
             
-        response = f'-ERR PSYNC not supported in this role{CRLF}'.encode()
+        response = RESPProtocol.encode_error(ERROR_MESSAGES["PSYNC_NOT_SUPPORTED"])
         self.connection.sendall(response)
 
     def handle_ping(self, elems: list) -> None:
         """Handle PING command - respond with +PONG"""
-        response = f'+PONG{CRLF}'.encode()
+        response = RESPProtocol.encode_pong()
         self.connection.sendall(response)
 
     def handle_echo(self, elems: list) -> None:
         """Handle ECHO command - echo back the message"""
         if len(elems) < 2:
-            response = f'-ERR wrong number of arguments for ECHO command{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="ECHO")
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response)
             return
         
         message = elems[1]
-        response = f'+{message}{CRLF}'.encode()
+        response = RESPProtocol.encode_simple_string(message)
         self.connection.sendall(response)
 
     def handle_set(self, elems: list) -> None:
         """Handle SET command - set key-value pair with optional expiry"""
         if len(elems) < 3:
-            response = f'-ERR wrong number of arguments for SET command{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="SET")
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response)
             return
         
@@ -85,15 +86,15 @@ class RedisCommandHandler:
         if len(elems) >= 5 and elems[3].upper() == 'PX':
             try:
                 px_milliseconds = int(elems[4])
-                expiry = time.time() * 1000 + px_milliseconds
+                expiry = time.time() * MILLISECONDS_PER_SECOND + px_milliseconds
                 print(f"expiry {expiry}")
             except ValueError:
-                response = f'-ERR value is not an integer or out of range{CRLF}'.encode()
+                response = RESPProtocol.encode_error(ERROR_MESSAGES["VALUE_NOT_INTEGER"])
                 self.connection.sendall(response)
                 return
         
-        self.server.cache[key] = (value, expiry)
-        response = f'+OK{CRLF}'.encode()
+        self.server.storage.set(key, value, expiry)
+        response = RESPProtocol.encode_ok()
         self.connection.sendall(response)
 
         # propagate to replicas
@@ -103,68 +104,39 @@ class RedisCommandHandler:
     def handle_get(self, elems: list) -> None:
         """Handle GET command - get value for key"""
         if len(elems) < 2:
-            response = f'-ERR wrong number of arguments for GET command{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="GET")
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response)
             return
         
         key = elems[1]
-        
-        if key not in self.server.cache:
-            response = f'$-1{CRLF}'.encode()
-            self.connection.sendall(response)
-            return
-        
-        value, expiry = self.server.cache[key]
-        
-        # Check if key has expired
-        if expiry is not None:
-            current_time = time.time() * 1000
-            # Convert expiry to float if it's a string
-            expiry_time = float(expiry) if isinstance(expiry, str) else expiry
-            print(f"get expiry expiry={expiry_time} current_time={current_time}")
-            if current_time > expiry_time:
-                # Remove expired key
-                del self.server.cache[key]
-                response = f'$-1{CRLF}'.encode()
-                self.connection.sendall(response)
-                return
-        
-        response = f'${len(value)}{CRLF}{value}{CRLF}'.encode()
+        value = self.server.storage.get(key)
+        response = RESPProtocol.encode_bulk_string(value)
         self.connection.sendall(response)
 
     def handle_keys(self, elems: list) -> None:
         """Handle KEYS command - return all keys matching pattern"""
         if len(elems) < 2:
-            response = f'-ERR wrong number of arguments for KEYS command{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="KEYS")
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response)
             return
         
         pattern = elems[1]
+        keys = self.server.storage.keys(pattern)
         
-        # For now, just return all keys (simple implementation)
-        if pattern == '*':
-            keys = list(self.server.cache.keys())
-            print(f"keys={keys}")
-            print(f" {self.server.cache}")
-            print(f"Returning {len(keys)} keys")
-            
-            # Build RESP array response
-            response_parts = [f'*{len(keys)}']
-            for key in keys:
-                response_parts.append(f'${len(key)}')
-                response_parts.append(key)
-            
-            response = f'{CRLF}'.join(response_parts) + f'{CRLF}'
-            self.connection.sendall(response.encode())
-        else:
-            # For other patterns, return empty array for now
-            response = f'*0{CRLF}'.encode()
-            self.connection.sendall(response)
+        print(f"keys={keys}")
+        print(f" {self.server.storage.get_all()}")
+        print(f"Returning {len(keys)} keys")
+        
+        response = RESPProtocol.encode_array(keys)
+        self.connection.sendall(response)
 
     def handle_config(self, elems: list) -> None:
         """Handle CONFIG command - return configuration values"""
         if len(elems) < 3:
-            response = f'-ERR wrong number of arguments for CONFIG command{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="CONFIG")
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response)
             return
         
@@ -174,13 +146,13 @@ class RedisCommandHandler:
         if subcommand == 'GET':
             if parameter == 'dir':
                 dir_path = self.server.config.get('dir', '/tmp')
-                response = f'*2{CRLF}$3{CRLF}dir{CRLF}${len(dir_path)}{CRLF}{dir_path}{CRLF}'.encode()
+                response = RESPProtocol.encode_config_array('dir', dir_path)
                 self.connection.sendall(response)
             else:
-                response = f'*0{CRLF}'.encode()
+                response = RESPProtocol.encode_empty_array()
                 self.connection.sendall(response)
         else:
-            response = f'-ERR Unknown subcommand or wrong number of arguments for CONFIG{CRLF}'.encode()
+            response = RESPProtocol.encode_error(ERROR_MESSAGES["UNKNOWN_SUBCOMMAND"])
             self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
@@ -194,5 +166,6 @@ class RedisCommandHandler:
             handler = self.cmd_handlers[cmd]
             handler(elems)
         else:
-            response = f'-ERR unknown command \'{cmd}\'{CRLF}'.encode()
+            error_msg = ERROR_MESSAGES["UNKNOWN_COMMAND"].format(command=cmd)
+            response = RESPProtocol.encode_error(error_msg)
             self.connection.sendall(response) 
