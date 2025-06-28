@@ -23,14 +23,8 @@ class RedisCommandHandler:
 
     def handle_info(self, elems: list, connection) -> None:
         """Handle INFO command - return server replication info"""
-        info = self.server.replication_info
-        lines = [
-            f'role:{info.role}',
-            f'connected_slaves:{info.connected_slaves}',
-            f'master_replid:{info.master_replid}',
-            f'master_repl_offset:{info.master_repl_offset}'
-        ]
-        content = '\r\n'.join(lines) + '\r\n'
+        info_lines = self.server.replication.get_info_lines()
+        content = '\r\n'.join(info_lines) + '\r\n'
         response = f'${len(content)}{CRLF}{content}{CRLF}'.encode('utf-8')
         connection.sendall(response)
 
@@ -114,7 +108,7 @@ class RedisCommandHandler:
 
         # propagate to replicas
         payload = f'*3{CRLF}$3{CRLF}SET{CRLF}${len(key)}{CRLF}{key}{CRLF}${len(value)}{CRLF}{value}{CRLF}'
-        self.server.propagate_to_replicas(payload.encode('utf-8'))
+        self.server.replication.propagate_to_replicas(payload.encode('utf-8'))
 
     def handle_get(self, elems: list, connection) -> None:
         """Handle GET command - retrieve a value by key"""
@@ -175,11 +169,11 @@ class RedisCommandHandler:
 
     def handle_psync(self, elems: list, connection) -> None:
         """Handle PSYNC command: respond with +FULLRESYNC <REPL_ID> 0 if master."""
-        if self.server.replication_info.role == 'master':
+        if self.server.replication.role == 'master':
             # Add this connection as a replica
-            self.server.add_replica_connection(connection)
+            self.server.replication.add_replica_connection(connection)
             
-            replid = self.server.replication_info.master_replid
+            replid = self.server.replication.master_replid
             resp1 = f'+FULLRESYNC {replid} 0{CRLF}'.encode()
             empty_rdb_hex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
             empty_rdb_bytes = bytes.fromhex(empty_rdb_hex)

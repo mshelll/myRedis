@@ -7,21 +7,8 @@ from .config import ServerConfig
 from .rdb_parser import RDBParser
 from .command_handler import RedisCommandHandler
 from .client_handler import ClientHandler
+from .replication import Replication
 from .constants import CRLF
-
-class ReplicationInfo:
-    def __init__(self, role: str = 'master', connected_slaves: int = 0, master_replid: str = None, master_repl_offset: int = 0):
-        self.role = role
-        self.connected_slaves = connected_slaves
-        self.master_replid = master_replid or self.generate_replid()
-        self.master_repl_offset = master_repl_offset
-        # Track replica connections
-        self.replica_connections = []
-
-    @staticmethod
-    def generate_replid():
-        # Generate a random 40-character hex string
-        return ''.join(random.choices('0123456789abcdef', k=40))
 
 class RedisServer:
     """Main Redis server class that manages configuration and server lifecycle"""
@@ -31,13 +18,13 @@ class RedisServer:
         self.cache: Dict[str, tuple] = {}
         self.config_manager = ServerConfig()
         self.command_handler = RedisCommandHandler(self)
-        self.replication_info = None
+        self.replication = None
     
     def initialize(self, args=None):
         """Initialize server configuration from command line args"""
         self.config = self.config_manager.initialize(args)
-        # Set up replication info
-        self.replication_info = ReplicationInfo(
+        # Set up replication
+        self.replication = Replication(
             role=self.config.get('role', 'master'),
             connected_slaves=0,
             master_replid=None,
@@ -175,27 +162,4 @@ class RedisServer:
             traceback.print_exc()
             print(e)
         finally:
-            server_socket.close()
-
-    def propagate_to_replicas(self, payload: bytes):
-        """Propagate a command payload to all connected replicas"""
-        if self.replication_info.role != 'master':
-            return
-            
-        # Send to all tracked replica connections
-        for replica_conn in self.replication_info.replica_connections:
-            try:
-                replica_conn.sendall(payload)
-                print(f"Propagated command to replica connection")
-            except Exception as e:
-                print(f"Failed to propagate to replica connection: {e}")
-                # Remove failed connection
-                self.replication_info.replica_connections.remove(replica_conn)
-                self.replication_info.connected_slaves = len(self.replication_info.replica_connections)
-
-    def add_replica_connection(self, connection):
-        """Add a replica connection to the tracking list"""
-        if self.replication_info.role == 'master':
-            self.replication_info.replica_connections.append(connection)
-            self.replication_info.connected_slaves = len(self.replication_info.replica_connections)
-            print(f"Added replica connection. Total replicas: {self.replication_info.connected_slaves}") 
+            server_socket.close() 
