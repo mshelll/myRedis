@@ -292,6 +292,8 @@ class RedisServer:
                     buffer = buffer[len(complete_message):]
                     
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Error handling master propagation: {e}")
     
     def parse_resp(self, data: str) -> list:
