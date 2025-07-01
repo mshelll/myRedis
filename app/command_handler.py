@@ -21,6 +21,7 @@ class RedisCommandHandler:
             'info': self.handle_info,
             'replconf': self.handle_replconf,
             'psync': self.handle_psync,
+            'wait': self.handle_wait,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -165,6 +166,13 @@ class RedisCommandHandler:
         else:
             response = RESPProtocol.encode_error(ERROR_MESSAGES["UNKNOWN_SUBCOMMAND"])
             self.connection.sendall(response)
+
+    def handle_wait(self, elems: list) -> None:
+        """Handle WAIT command - always return 0 (no replicas acknowledged)"""
+        # WAIT <numreplicas> <timeout>
+        # For now, we do not support real replica ACKs, so always return 0
+        response = b':0\r\n'
+        self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
         """Process a command by calling the appropriate handler"""
