@@ -19,6 +19,8 @@ class RedisServer:
         self.config_manager = ServerConfig()
         self.replication = None
         self.master_connection = None  # Store connection to master for slaves
+        self.replication_offset = 0  # Track replication offset for slave servers
+        self.first_getack_sent = False  # Track if first GETACK has been sent
     
     def initialize(self, args=None):
         """Initialize server configuration from command line args"""
@@ -124,6 +126,9 @@ class RedisServer:
                 # Now we need to keep the connection open to receive propagated commands
                 # This connection should stay alive for the duration of the server
                 self.master_connection = sock
+                # Reset replication offset after RDB transfer
+                self.replication_offset = 0
+                self.first_getack_sent = False
                 print("Master connection established and ready for command propagation")
 
         except Exception as e:
@@ -182,24 +187,6 @@ class RedisServer:
             - Errors start with -: -ERR\r\n
             - Integers start with :: :1000\r\n
             
-            Example RESP Array Message:
-            *3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\n123\r\n
-            |  |  |  |  |  |  |  |  |  |  |  |  |  |
-            |  |  |  |  |  |  |  |  |  |  |  |  |  +-- value "123"
-            |  |  |  |  |  |  |  |  |  |  |  |  +-- length 3
-            |  |  |  |  |  |  |  |  |  |  |  +-- bulk string indicator $
-            |  |  |  |  |  |  |  |  |  |  +-- value "foo"
-            |  |  |  |  |  |  |  |  |  +-- length 3
-            |  |  |  |  |  |  |  |  +-- bulk string indicator $
-            |  |  |  |  |  |  |  +-- value "SET"
-            |  |  |  |  |  |  +-- length 3
-            |  |  |  |  |  +-- bulk string indicator $
-            |  |  |  |  +-- CRLF line ending
-            |  |  |  +-- count 3 (3 elements in array)
-            |  |  +-- array indicator *
-            |  +-- CRLF line ending
-            +-- array indicator *
-            
             Args:
                 buffer (bytes): Raw bytes containing RESP data, may be partial
             
@@ -213,45 +200,80 @@ class RedisServer:
                 # If we can't decode, the buffer is incomplete (partial UTF-8 sequence)
                 return None
             
-            # RESP messages must start with a type indicator
-            if not text.startswith('*'):
-                # Not an array message, could be other RESP types or invalid data
+            if not text:
                 return None
             
+            # Handle different RESP types
+            if text.startswith('*'):
+                # Array message
+                return extract_array_message(text)
+            elif text.startswith('$'):
+                # Bulk string message
+                return extract_bulk_string_message(text)
+            elif text.startswith('+') or text.startswith('-') or text.startswith(':'):
+                # Simple string, error, or integer message
+                return extract_simple_message(text)
+            else:
+                # Unknown message type
+                return None
+        
+        def extract_array_message(text):
+            """Extract complete array message"""
             # Find the first CRLF to extract the array header
-            # Array header format: *<count>\r\n
-            # Example: "*3\r\n" means array with 3 elements
             header_end = text.find('\r\n')
             if header_end == -1:
-                # No CRLF found, header is incomplete
                 return None
             
-            # Extract the count from the header
-            # text[1:] removes the '*' character
-            # text[1:header_end] gives us just the number
             try:
                 array_count = int(text[1:header_end])
             except ValueError:
-                # Header doesn't contain a valid number
                 return None
             
-            # Calculate how many lines we need for a complete array message
-            # For each element in the array, we need:
-            # 1. A length line (starts with $)
-            # 2. A value line (the actual data)
-            # So total lines = 1 (header) + array_count * 2
             lines = text.split('\r\n')
             expected_lines = 1 + array_count * 2  # header + (length + value) pairs
             
             if len(lines) < expected_lines:
-                # Not enough lines yet, message is incomplete
                 return None
             
-            # Extract the complete message by taking only the lines we need
             complete_lines = lines[:expected_lines]
             complete_message = '\r\n'.join(complete_lines) + '\r\n'
+            return complete_message.encode()
+        
+        def extract_bulk_string_message(text):
+            """Extract complete bulk string message"""
+            # Find the first CRLF to get the length
+            header_end = text.find('\r\n')
+            if header_end == -1:
+                return None
             
-            # Convert back to bytes for consistency with the rest of the system
+            try:
+                length = int(text[1:header_end])
+            except ValueError:
+                return None
+            
+            # For bulk strings, we need: $<length>\r\n<data>\r\n
+            # So we need 2 lines + the data
+            lines = text.split('\r\n')
+            if len(lines) < 2:
+                return None
+            
+            # Check if we have enough data
+            data_line = lines[1]
+            if len(data_line) < length:
+                return None
+            
+            # Extract the complete message
+            complete_message = f'${length}\r\n{data_line[:length]}\r\n'
+            return complete_message.encode()
+        
+        def extract_simple_message(text):
+            """Extract complete simple string, error, or integer message"""
+            # These messages end with \r\n
+            if '\r\n' not in text:
+                return None
+            
+            end_pos = text.find('\r\n') + 2
+            complete_message = text[:end_pos]
             return complete_message.encode()
         
         try:
@@ -270,23 +292,44 @@ class RedisServer:
                     if not complete_message:
                         break  # Wait for more data
                     
-                    # Reuse the existing parsing pattern!
-                    elems = self.parse_resp(complete_message.decode('utf-8'))
-                    print(f"Parsed propagated elements: {elems}")
+                    # Check the message type
+                    message_text = complete_message.decode('utf-8')
                     
-                    # Apply the command (reuse command handler logic)
-                    if elems and elems[0].lower() == 'set' and len(elems) >= 3:
-                        key = elems[1]
-                        value = elems[2]
-                        self.storage.set(key, value)
-                        print(f"Applied propagated SET: {key} = {value}")
-                    elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
-                        subcommand = elems[1].upper()
-                        if subcommand == 'GETACK':
-                            # Respond with REPLCONF ACK 0
-                            ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
-                            self.master_connection.sendall(ack_response.encode('utf-8'))
-                            print("Sent REPLCONF ACK 0 to master")
+                    if message_text.startswith('*'):
+                        # Array message - this is a command
+                        elems = self.parse_resp(message_text)
+                        print(f"Parsed propagated elements: {elems}")
+                        
+                        # Apply the command (reuse command handler logic)
+                        if elems and elems[0].lower() == 'set' and len(elems) >= 3:
+                            key = elems[1]
+                            value = elems[2]
+                            self.storage.set(key, value)
+                            print(f"Applied propagated SET: {key} = {value}")
+                        elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
+                            subcommand = elems[1].upper()
+                            if subcommand == 'GETACK':
+                                # Respond with current replication offset
+                                if not self.first_getack_sent:
+                                    # First GETACK after RDB should return 0
+                                    ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
+                                    self.first_getack_sent = True
+                                    print("Sent REPLCONF ACK 0 to master (first GETACK)")
+                                else:
+                                    # Subsequent GETACKs return current offset
+                                    ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}${len(str(self.replication_offset))}{CRLF}{self.replication_offset}{CRLF}'
+                                    print(f"Sent REPLCONF ACK {self.replication_offset} to master")
+                                self.master_connection.sendall(ack_response.encode('utf-8'))
+                        
+                        # Increment replication offset by the length of this command
+                        self.replication_offset += len(complete_message)
+                        print(f"Updated replication offset to {self.replication_offset}")
+                    elif message_text.startswith('$'):
+                        # Bulk string message - this is RDB data, just consume it
+                        print(f"Consumed RDB data: {len(complete_message)} bytes")
+                    elif message_text.startswith('+') or message_text.startswith('-') or message_text.startswith(':'):
+                        # Simple string, error, or integer message - just consume it
+                        print(f"Consumed message: {message_text.strip()}")
                     
                     # Remove processed message from buffer
                     buffer = buffer[len(complete_message):]
