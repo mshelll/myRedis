@@ -168,10 +168,10 @@ class RedisCommandHandler:
             self.connection.sendall(response)
 
     def handle_wait(self, elems: list) -> None:
-        """Handle WAIT command - always return 0 (no replicas acknowledged)"""
-        # WAIT <numreplicas> <timeout>
-        # For now, we do not support real replica ACKs, so always return 0
-        response = b':0\r\n'
+        """Handle WAIT command - return number of connected replicas"""
+        # For now, we do not support real replica ACKs, so always return the number of connected replicas
+        num_replicas = self.server.replication.connected_slaves
+        response = f":{num_replicas}{CRLF}".encode('utf-8')
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
