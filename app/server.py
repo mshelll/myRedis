@@ -200,6 +200,22 @@ class RedisServer:
             buffer = getattr(self, 'pending_data', b'')
             if buffer:
                 print(f"Processing pending data: {len(buffer)} bytes")
+                print(f"Pending data: {buffer!r}")
+                
+                # Check if pending data is missing the array header
+                if buffer.startswith(b'$') and b'REPLCONF' in buffer:
+                    # This is likely a REPLCONF command missing the array header
+                    # Reconstruct the complete message: *3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n
+                    reconstructed_data = b'*3\r\n' + buffer
+                    print(f"Reconstructed data: {reconstructed_data!r}")
+                    buffer = reconstructed_data
+                elif buffer.startswith(b'\r\n$') and b'REPLCONF' in buffer:
+                    # This is a REPLCONF command missing the array header, with extra \r\n
+                    # Reconstruct the complete message: *3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n
+                    reconstructed_data = b'*3' + buffer
+                    print(f"Reconstructed data: {reconstructed_data!r}")
+                    buffer = reconstructed_data
+                
                 self.pending_data = b''  # Clear pending data
             
             while True:
@@ -232,6 +248,7 @@ class RedisServer:
                             print(f"Applied propagated SET: {key} = {value}")
                         elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
                             subcommand = elems[1].upper()
+                            print(f"Processing REPLCONF subcommand: {subcommand}")
                             if subcommand == 'GETACK':
                                 # Respond with current replication offset
                                 if not self.first_getack_sent:
@@ -243,7 +260,9 @@ class RedisServer:
                                     # Subsequent GETACKs return current offset
                                     ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}${len(str(self.replication_offset))}{CRLF}{self.replication_offset}{CRLF}'
                                     print(f"Sent REPLCONF ACK {self.replication_offset} to master")
+                                print(f"Sending ACK response: {ack_response!r}")
                                 self.master_connection.sendall(ack_response.encode('utf-8'))
+                                print("ACK response sent successfully")
                         
                         # Increment replication offset by the length of this command
                         self.replication_offset += len(complete_message)
