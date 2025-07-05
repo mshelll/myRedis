@@ -42,6 +42,19 @@ class RedisCommandHandler:
                 ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
                 self.connection.sendall(ack_response.encode('utf-8'))
                 return
+            
+            # Handle ACK subcommand (from replicas)
+            elif subcommand == 'ACK' and len(elems) >= 3:
+                try:
+                    ack_offset = int(elems[2])
+                    # This is an acknowledgment from a replica
+                    # Find which replica connection this corresponds to
+                    # For now, we'll assume this is from a replica and update tracking
+                    if hasattr(self.server.replication, 'handle_client_ack'):
+                        # Handle ACK that came through client connection
+                        self.server.replication.handle_client_ack(ack_offset)
+                except ValueError:
+                    pass
         
         # Default response for other REPLCONF commands
         response = RESPProtocol.encode_ok()
@@ -168,10 +181,24 @@ class RedisCommandHandler:
             self.connection.sendall(response)
 
     def handle_wait(self, elems: list) -> None:
-        """Handle WAIT command - return number of connected replicas"""
-        # For now, we do not support real replica ACKs, so always return the number of connected replicas
-        num_replicas = self.server.replication.connected_slaves
-        response = f":{num_replicas}{CRLF}".encode('utf-8')
+        """Handle WAIT command - wait for replicas to acknowledge the last write operation"""
+        if len(elems) < 3:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="WAIT")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        
+        try:
+            num_replicas = int(elems[1])
+            timeout_ms = int(elems[2])
+        except ValueError:
+            response = RESPProtocol.encode_error(ERROR_MESSAGES["VALUE_NOT_INTEGER"])
+            self.connection.sendall(response)
+            return
+        
+        # Wait for replicas to acknowledge the last write operation
+        acked_count = self.server.replication.wait_for_acks(num_replicas, timeout_ms)
+        response = f":{acked_count}{CRLF}".encode('utf-8')
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
