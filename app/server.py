@@ -196,6 +196,9 @@ class RedisServer:
             return
         
         try:
+            # Set socket timeout to avoid blocking indefinitely
+            self.master_connection.settimeout(1.0)  # 1 second timeout
+            
             # Start with any pending data from handshake
             buffer = getattr(self, 'pending_data', b'')
             if buffer:
@@ -211,72 +214,121 @@ class RedisServer:
                     buffer = reconstructed_data
                 elif buffer.startswith(b'\r\n$') and b'REPLCONF' in buffer:
                     # This is a REPLCONF command missing the array header, with extra \r\n
-                    # Reconstruct the complete message: *3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n
                     reconstructed_data = b'*3' + buffer
                     print(f"Reconstructed data: {reconstructed_data!r}")
                     buffer = reconstructed_data
-                
                 self.pending_data = b''  # Clear pending data
-            
-            while True:
-                data = self.master_connection.recv(1024)
-                if not data:
-                    print("Master connection closed")
-                    break
-                
-                buffer += data
-                
-                # Process complete commands from buffer
+
+                # --- Process any complete RESP messages in buffer before entering main loop ---
                 while True:
                     complete_message = self.extract_complete_resp_message(buffer)
                     if not complete_message:
-                        break  # Wait for more data
-                    
-                    # Check the message type
+                        break
                     message_text = complete_message.decode('utf-8')
-                    
                     if message_text.startswith('*'):
-                        # Array message - this is a command
                         elems = self.parse_resp(message_text)
-                        print(f"Parsed propagated elements: {elems}")
-                        
-                        # Apply the command (reuse command handler logic)
-                        if elems and elems[0].lower() == 'set' and len(elems) >= 3:
-                            key = elems[1]
-                            value = elems[2]
-                            self.storage.set(key, value)
-                            print(f"Applied propagated SET: {key} = {value}")
-                            # Do NOT send any response for propagated SET
-                        elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
+                        print(f"[PENDING] Parsed propagated elements: {elems}")
+                        if elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
                             subcommand = elems[1].upper()
-                            print(f"Processing REPLCONF subcommand: {subcommand}")
+                            print(f"[PENDING] Processing REPLCONF subcommand: {subcommand}")
                             if subcommand == 'GETACK':
-                                # Respond with current replication offset
-                                if not self.first_getack_sent:
-                                    # First GETACK after RDB should return 0
-                                    ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
-                                    self.first_getack_sent = True
-                                    print("Sent REPLCONF ACK 0 to master (first GETACK)")
-                                else:
-                                    # Subsequent GETACKs return current offset
-                                    ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}${len(str(self.replication_offset))}{CRLF}{self.replication_offset}{CRLF}'
-                                    print(f"Sent REPLCONF ACK {self.replication_offset} to master")
-                                print(f"Sending ACK response: {ack_response!r}")
-                                self.master_connection.sendall(ack_response.encode('utf-8'))
-                                print("ACK response sent successfully")
-                        # Do NOT send any response for other propagated commands
+                                try:
+                                    if not self.first_getack_sent:
+                                        ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
+                                        self.first_getack_sent = True
+                                        print("[PENDING] Sent REPLCONF ACK 0 to master (first GETACK)")
+                                    else:
+                                        ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}${len(str(self.replication_offset))}{CRLF}{self.replication_offset}{CRLF}'
+                                        print(f"[PENDING] Sent REPLCONF ACK {self.replication_offset} to master")
+                                    print(f"[PENDING] Sending ACK response: {ack_response!r}")
+                                    self.master_connection.sendall(ack_response.encode('utf-8'))
+                                    print("[PENDING] ACK response sent successfully")
+                                except Exception as e:
+                                    print(f"[PENDING] Error sending ACK response: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                         # Increment replication offset by the length of this command
                         self.replication_offset += len(complete_message)
-                        print(f"Updated replication offset to {self.replication_offset}")
-                    elif message_text.startswith('$'):
-                        # Bulk string message - this is RDB data, just consume it
-                        print(f"Consumed RDB data: {len(complete_message)} bytes")
-                    elif message_text.startswith('+') or message_text.startswith('-') or message_text.startswith(':'):
-                        # Simple string, error, or integer message - just consume it
-                        print(f"Consumed message: {message_text.strip()}")
-                    
+                        print(f"[PENDING] Updated replication offset to {self.replication_offset}")
                     # Remove processed message from buffer
                     buffer = buffer[len(complete_message):]
+
+            # --- Main loop for new data ---
+            while True:
+                try:
+                    data = self.master_connection.recv(1024)
+                    if not data:
+                        print("Master connection closed")
+                        break
+                    
+                    buffer += data
+                    
+                    # Process complete commands from buffer
+                    while True:
+                        complete_message = self.extract_complete_resp_message(buffer)
+                        if not complete_message:
+                            break  # Wait for more data
+                        
+                        # Check the message type
+                        message_text = complete_message.decode('utf-8')
+                        
+                        if message_text.startswith('*'):
+                            # Array message - this is a command
+                            elems = self.parse_resp(message_text)
+                            print(f"Parsed propagated elements: {elems}")
+                            
+                            # Apply the command (reuse command handler logic)
+                            if elems and elems[0].lower() == 'set' and len(elems) >= 3:
+                                key = elems[1]
+                                value = elems[2]
+                                self.storage.set(key, value)
+                                print(f"Applied propagated SET: {key} = {value}")
+                                # Do NOT send any response for propagated SET
+                            elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
+                                subcommand = elems[1].upper()
+                                print(f"Processing REPLCONF subcommand: {subcommand}")
+                                if subcommand == 'GETACK':
+                                    # Respond with current replication offset
+                                    try:
+                                        if not self.first_getack_sent:
+                                            # First GETACK after RDB should return 0
+                                            ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}$1{CRLF}0{CRLF}'
+                                            self.first_getack_sent = True
+                                            print("Sent REPLCONF ACK 0 to master (first GETACK)")
+                                        else:
+                                            # Subsequent GETACKs return current offset
+                                            ack_response = f'*3{CRLF}$8{CRLF}REPLCONF{CRLF}$3{CRLF}ACK{CRLF}${len(str(self.replication_offset))}{CRLF}{self.replication_offset}{CRLF}'
+                                            print(f"Sent REPLCONF ACK {self.replication_offset} to master")
+                                        print(f"Sending ACK response: {ack_response!r}")
+                                        self.master_connection.sendall(ack_response.encode('utf-8'))
+                                        print("ACK response sent successfully")
+                                    except Exception as e:
+                                        print(f"Error sending ACK response: {e}")
+                                        import traceback
+                                        traceback.print_exc()
+                            # Do NOT send any response for other propagated commands
+                            # Increment replication offset by the length of this command
+                            self.replication_offset += len(complete_message)
+                            print(f"Updated replication offset to {self.replication_offset}")
+                        elif message_text.startswith('$'):
+                            # Bulk string message - this is RDB data, just consume it
+                            print(f"Consumed RDB data: {len(complete_message)} bytes")
+                        elif message_text.startswith('+') or message_text.startswith('-') or message_text.startswith(':'):
+                            # Simple string, error, or integer message - just consume it
+                            print(f"Consumed message: {message_text.strip()}")
+                        
+                        # Remove processed message from buffer
+                        buffer = buffer[len(complete_message):]
+                        
+                except socket.timeout:
+                    # Timeout is expected when no data is available
+                    # This allows the replica to respond to GETACK commands
+                    continue
+                except Exception as e:
+                    print(f"Error in propagation loop: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    break
                     
         except Exception as e:
             import traceback
