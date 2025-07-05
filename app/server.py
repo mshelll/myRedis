@@ -246,6 +246,7 @@ class RedisServer:
                             value = elems[2]
                             self.storage.set(key, value)
                             print(f"Applied propagated SET: {key} = {value}")
+                            # Do NOT send any response for propagated SET
                         elif elems and elems[0].lower() == 'replconf' and len(elems) >= 2:
                             subcommand = elems[1].upper()
                             print(f"Processing REPLCONF subcommand: {subcommand}")
@@ -263,7 +264,7 @@ class RedisServer:
                                 print(f"Sending ACK response: {ack_response!r}")
                                 self.master_connection.sendall(ack_response.encode('utf-8'))
                                 print("ACK response sent successfully")
-                        
+                        # Do NOT send any response for other propagated commands
                         # Increment replication offset by the length of this command
                         self.replication_offset += len(complete_message)
                         print(f"Updated replication offset to {self.replication_offset}")
@@ -452,6 +453,14 @@ class RedisServer:
                 # Wait for a client to connect
                 connection, client_address = server_socket.accept()
                 print(f"New connection from {client_address}")
+
+                # Debug print file descriptors
+                if self.config.get('role') == 'slave' and self.master_connection is not None:
+                    print(f"[DEBUG] master_connection.fileno(): {self.master_connection.fileno()}, new connection.fileno(): {connection.fileno()}")
+                # If this is a replica and this connection is the master connection, do NOT start a ClientHandler for it
+                if self.config.get('role') == 'slave' and self.master_connection is not None and connection.fileno() == self.master_connection.fileno():
+                    print("Connection is master connection (replication stream), skipping ClientHandler.")
+                    continue
 
                 # Create a new thread to handle this client
                 client_handler = ClientHandler(connection, self)

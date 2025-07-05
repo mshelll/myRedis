@@ -15,6 +15,7 @@ class ClientHandler:
     
     def handle(self):
         """Process client connection and commands"""
+        psync_handled = False
         try:
             while True:
                 # Read data from the client
@@ -39,13 +40,21 @@ class ClientHandler:
                 cmd = elems[0].lower()
                 print(f"Command: {cmd}")
 
+                # If this is a PSYNC command (master connection for replication), handle it and then break
+                if cmd == 'psync':
+                    self.command_handler.process_command(elems)
+                    print("Detected PSYNC command, breaking client handler loop for replication stream.")
+                    psync_handled = True
+                    break
+
                 # Process the command using the client's command handler
                 self.command_handler.process_command(elems)
 
         except Exception as e:
             print(f"Error handling client: {e}")
         finally:
-            self.connection.close()
+            if not psync_handled:
+                self.connection.close()
 
     def parse_resp(self, data: str) -> list:
         """Parse RESP (Redis Serialization Protocol) data"""

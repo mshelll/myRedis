@@ -177,8 +177,8 @@ class Replication:
             return 0
         
         if self.write_sequence == 0:
-            # No writes have been made yet
-            return 0
+            # No writes have been made yet, return the number of connected replicas
+            return len(self.replica_connections)
         
         target_sequence = self.write_sequence
         timeout_seconds = timeout_ms / 1000.0
