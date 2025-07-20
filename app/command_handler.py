@@ -22,6 +22,7 @@ class RedisCommandHandler:
             'replconf': self.handle_replconf,
             'psync': self.handle_psync,
             'wait': self.handle_wait,
+            'rpush': self.handle_rpush,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -139,6 +140,19 @@ class RedisCommandHandler:
         response = RESPProtocol.encode_bulk_string(value)
         self.connection.sendall(response)
 
+    def handle_rpush(self, elems: list) -> None:
+        """Handle RPUSH command - append one or more values to a list and return new length"""
+        if len(elems) < 3:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="RPUSH")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        values = elems[2:]
+        new_length = self.server.storage.rpush(key, *values)
+        response = f":{new_length}{CRLF}".encode('utf-8')
+        self.connection.sendall(response)
+
     def handle_keys(self, elems: list) -> None:
         """Handle KEYS command - return all keys matching pattern"""
         if len(elems) < 2:
@@ -200,6 +214,21 @@ class RedisCommandHandler:
         acked_count = self.server.replication.wait_for_acks(num_replicas, timeout_ms)
         response = f":{acked_count}{CRLF}".encode('utf-8')
         self.connection.sendall(response)
+
+    def handle_rpush(self, elems: list) -> None:
+        """Handle RPUSH command - append one or more values to a list and return new length"""
+        if len(elems) < 3:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="RPUSH")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        values = elems[2:]
+        new_length = self.server.storage.rpush(key, *values)
+        response = f":{new_length}{CRLF}".encode('utf-8')
+        self.connection.sendall(response)
+
+    
 
     def process_command(self, elems: list) -> None:
         """Process a command by calling the appropriate handler"""

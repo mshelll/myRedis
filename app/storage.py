@@ -67,3 +67,37 @@ class Storage:
         for key, value, expiry in keys_values:
             if key:  # Skip empty keys
                 self._cache[key] = (value, expiry) 
+
+    def rpush(self, key: str, *values: str) -> int:
+        """Append one or multiple values to a list, create list if not exists. Returns new length."""
+        # Check if key exists and is a list
+        if key in self._cache:
+            current_value, expiry = self._cache[key]
+            # If not a list, convert to list
+            if not isinstance(current_value, list):
+                current_value = [current_value]
+        else:
+            current_value = []
+            expiry = None
+        current_value.extend(values)
+        self._cache[key] = (current_value, expiry)
+        return len(current_value)
+
+    def lrange(self, key: str, start: int, stop: int) -> list:
+        """Get a range of elements from a list."""
+        if key not in self._cache:
+            return []
+        value, expiry = self._cache[key]
+        if not isinstance(value, list):
+            return []
+        # Handle negative indices like Redis
+        list_len = len(value)
+        if start < 0:
+            start = list_len + start
+        if stop < 0:
+            stop = list_len + stop
+        # Redis LRANGE is inclusive of stop
+        stop = min(stop, list_len - 1)
+        if start > stop or start >= list_len:
+            return []
+        return value[start:stop+1] 
