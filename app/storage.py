@@ -93,9 +93,10 @@ class Storage:
         # Handle negative indices like Redis
         list_len = len(value)
         if start < 0:
-            start = list_len + start
+            start = max(0, list_len + start)
         if stop < 0:
-            stop = list_len + stop
+            stop = max(0, list_len + stop)
+        print(f"lrange key={key} start={start} stop={stop}")
         # Redis LRANGE is inclusive of stop
         stop = min(stop, list_len - 1)
         if start > stop or start >= list_len:
