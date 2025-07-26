@@ -82,6 +82,19 @@ class Storage:
         current_value.extend(values)
         self._cache[key] = (current_value, expiry)
         return len(current_value)
+    
+    def lpush(self, key: str, *values: str) -> int:
+        """Prepend one or more values to a list, create list if not exists. Returns new length."""
+        if key in self._cache:
+            current_value, expiry = self._cache[key]
+            if not isinstance(current_value, list):
+                current_value = [current_value]
+        else:
+            current_value = []
+            expiry = None
+        current_value = list(reversed(values)) + current_value
+        self._cache[key] = (current_value, expiry)
+        return len(current_value)
 
     def lrange(self, key: str, start: int, stop: int) -> list:
         """Get a range of elements from a list."""

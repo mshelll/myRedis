@@ -24,6 +24,7 @@ class RedisCommandHandler:
             'wait': self.handle_wait,
             'rpush': self.handle_rpush,
             'lrange': self.handle_lrange,
+            'lpush': self.handle_lpush,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -241,6 +242,19 @@ class RedisCommandHandler:
         stop = int(elems[3])
         elements = self.server.storage.lrange(key, start, stop)
         response = RESPProtocol.encode_array(elements)
+        self.connection.sendall(response)
+
+    def handle_lpush(self, elems: list) -> None:
+        """Handle LPUSH command - append one or more values to a list and return new length"""
+        if len(elems) < 3:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="LPUSH")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        values = elems[2:]
+        new_length = self.server.storage.lpush(key, *values)
+        response = f":{new_length}{CRLF}".encode('utf-8')
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
