@@ -125,11 +125,14 @@ class Storage:
             return 0
         return len(value)
     
-    def lpop(self, key: str) -> Optional[str]:
+    def lpop(self, key: str, pop_count: int) -> Optional[str]:
         """Remove and return the first element of a list."""
         if key not in self._cache:
             return None
         value, expiry = self._cache[key]
         if not isinstance(value, list):
             return None
-        return value.pop(0)
+        elems = []
+        for i in range(pop_count):
+            elems += [value.pop(0)]
+        return elems

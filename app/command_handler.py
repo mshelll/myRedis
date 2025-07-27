@@ -279,7 +279,8 @@ class RedisCommandHandler:
             self.connection.sendall(response)
             return
         key = elems[1]
-        element = self.server.storage.lpop(key)
+        pop_count = elems[2] if len(elems) > 2 else 1
+        element = self.server.storage.lpop(key, pop_count)
         response = RESPProtocol.encode_bulk_string(element)
         self.connection.sendall(response)
 
