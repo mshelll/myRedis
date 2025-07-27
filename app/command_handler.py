@@ -26,6 +26,7 @@ class RedisCommandHandler:
             'lrange': self.handle_lrange,
             'lpush': self.handle_lpush,
             'llen': self.handle_llen,
+            'lpop': self.handle_lpop,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -268,6 +269,18 @@ class RedisCommandHandler:
         key = elems[1]
         length = self.server.storage.llen(key)
         response = f":{length}{CRLF}".encode('utf-8')
+        self.connection.sendall(response)
+
+    def handle_lpop(self, elems: list) -> None:
+        """Handle LPOP command - remove and return the first element of a list"""
+        if len(elems) < 2:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="LPOP")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        element = self.server.storage.lpop(key)
+        response = RESPProtocol.encode_bulk_string(element)
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:

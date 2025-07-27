@@ -124,3 +124,12 @@ class Storage:
         if not isinstance(value, list):
             return 0
         return len(value)
+    
+    def lpop(self, key: str) -> Optional[str]:
+        """Remove and return the first element of a list."""
+        if key not in self._cache:
+            return None
+        value, expiry = self._cache[key]
+        if not isinstance(value, list):
+            return None
+        return value.pop(0)
