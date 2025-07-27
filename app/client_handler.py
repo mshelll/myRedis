@@ -51,7 +51,9 @@ class ClientHandler:
                 self.command_handler.process_command(elems)
 
         except Exception as e:
-            print(f"Error handling client: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"Error handling client: {e!r}")
         finally:
             if not psync_handled:
                 self.connection.close()
