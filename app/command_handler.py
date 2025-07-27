@@ -25,6 +25,7 @@ class RedisCommandHandler:
             'rpush': self.handle_rpush,
             'lrange': self.handle_lrange,
             'lpush': self.handle_lpush,
+            'llen': self.handle_llen,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -255,6 +256,18 @@ class RedisCommandHandler:
         values = elems[2:]
         new_length = self.server.storage.lpush(key, *values)
         response = f":{new_length}{CRLF}".encode('utf-8')
+        self.connection.sendall(response)
+
+    def handle_llen(self, elems: list) -> None:
+        """Handle LLEN command - return the length of a list"""
+        if len(elems) < 2:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="LLEN")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        length = self.server.storage.llen(key)
+        response = f":{length}{CRLF}".encode('utf-8')
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:

@@ -115,3 +115,12 @@ class Storage:
         if start > stop or start >= list_len:
             return []
         return value[start:stop+1] 
+    
+    def llen(self, key: str) -> int:
+        """Get the length of a list."""
+        if key not in self._cache:
+            return 0
+        value, expiry = self._cache[key]
+        if not isinstance(value, list):
+            return 0
+        return len(value)
