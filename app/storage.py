@@ -1,5 +1,7 @@
 import time
-from typing import Dict, Optional, List, Tuple, Any
+import threading
+from typing import Dict, Optional, List, Tuple
+from collections import defaultdict, deque
 
 
 class Storage:
@@ -7,6 +9,9 @@ class Storage:
     
     def __init__(self):
         self._cache: Dict[str, Tuple[str, Optional[float]]] = {}
+        # Add blocking operations support
+        self._waiting_clients: Dict[str, deque] = defaultdict(deque)
+        self._lock = threading.Lock()
     
     def set(self, key: str, value: str, expiry: Optional[float] = None) -> None:
         """Set a key-value pair with optional expiry"""
@@ -24,7 +29,8 @@ class Storage:
             current_time = time.time() * 1000
             # Convert expiry to float if it's a string
             expiry_time = float(expiry) if isinstance(expiry, str) else expiry
-            print(f"get expiry expiry={expiry_time} current_time={current_time}")
+            print(f"get expiry expiry={expiry_time} "
+                  f"current_time={current_time}")
             if current_time > expiry_time:
                 # Remove expired key
                 del self._cache[key]
@@ -62,39 +68,59 @@ class Storage:
         """Get all key-value pairs (for debugging)"""
         return self._cache.copy()
     
-    def load_from_rdb(self, keys_values: List[Tuple[str, str, Optional[float]]]) -> None:
+    def load_from_rdb(self, keys_values: List[Tuple[str, str, 
+                      Optional[float]]]) -> None:
         """Load keys and values from RDB parser"""
         for key, value, expiry in keys_values:
             if key:  # Skip empty keys
-                self._cache[key] = (value, expiry) 
+                self._cache[key] = (value, expiry)
 
     def rpush(self, key: str, *values: str) -> int:
-        """Append one or multiple values to a list, create list if not exists. Returns new length."""
-        # Check if key exists and is a list
-        if key in self._cache:
-            current_value, expiry = self._cache[key]
-            # If not a list, convert to list
-            if not isinstance(current_value, list):
-                current_value = [current_value]
-        else:
-            current_value = []
-            expiry = None
-        current_value.extend(values)
-        self._cache[key] = (current_value, expiry)
-        return len(current_value)
+        """Append one or multiple values to a list, create list if not 
+        exists. Returns new length."""
+        with self._lock:
+            # Check if key exists and is a list
+            if key in self._cache:
+                current_value, expiry = self._cache[key]
+                # If not a list, convert to list
+                if not isinstance(current_value, list):
+                    current_value = [current_value]
+            else:
+                current_value = []
+                expiry = None
+            current_value.extend(values)
+            self._cache[key] = (current_value, expiry)
+            
+            # Notify waiting clients
+            self._notify_waiting_clients(key)
+            
+            return len(current_value)
     
     def lpush(self, key: str, *values: str) -> int:
-        """Prepend one or more values to a list, create list if not exists. Returns new length."""
-        if key in self._cache:
-            current_value, expiry = self._cache[key]
-            if not isinstance(current_value, list):
-                current_value = [current_value]
-        else:
-            current_value = []
-            expiry = None
-        current_value = list(reversed(values)) + current_value
-        self._cache[key] = (current_value, expiry)
-        return len(current_value)
+        """Prepend one or more values to a list, create list if not 
+        exists. Returns new length."""
+        with self._lock:
+            if key in self._cache:
+                current_value, expiry = self._cache[key]
+                if not isinstance(current_value, list):
+                    current_value = [current_value]
+            else:
+                current_value = []
+                expiry = None
+            current_value = list(reversed(values)) + current_value
+            self._cache[key] = (current_value, expiry)
+            
+            # Notify waiting clients
+            self._notify_waiting_clients(key)
+            
+            return len(current_value)
+
+    def _notify_waiting_clients(self, key: str):
+        """Notify waiting clients that a key now has data"""
+        if key in self._waiting_clients and self._waiting_clients[key]:
+            # Only notify the first waiting client (FIFO)
+            event = self._waiting_clients[key].popleft()
+            event.set()
 
     def lrange(self, key: str, start: int, stop: int) -> list:
         """Get a range of elements from a list."""
@@ -114,7 +140,7 @@ class Storage:
         stop = min(stop, list_len - 1)
         if start > stop or start >= list_len:
             return []
-        return value[start:stop+1] 
+        return value[start:stop+1]
     
     def llen(self, key: str) -> int:
         """Get the length of a list."""
@@ -136,3 +162,71 @@ class Storage:
         for i in range(pop_count):
             elems += [value.pop(0)]
         return elems
+    
+    def blpop(self, key: str, timeout: int) -> Optional[List[str]]:
+        """Remove and return the first element of a list, blocking if 
+        empty."""
+        # First check if the key already has data
+        with self._lock:
+            if key in self._cache:
+                value, expiry = self._cache[key]
+                if isinstance(value, list) and len(value) > 0:
+                    element = value.pop(0)
+                    # If list becomes empty, remove the key
+                    if not value:
+                        del self._cache[key]
+                    else:
+                        self._cache[key] = (value, expiry)
+                    return [key, element]
+        
+        # Key doesn't exist or is empty, so we need to wait
+        if timeout == 0:
+            # Block indefinitely
+            event = threading.Event()
+            with self._lock:
+                self._waiting_clients[key].append(event)
+            
+            # Wait for the event to be set
+            event.wait()
+            
+            # Try to get the element
+            with self._lock:
+                if key in self._cache:
+                    value, expiry = self._cache[key]
+                    if isinstance(value, list) and len(value) > 0:
+                        element = value.pop(0)
+                        # If list becomes empty, remove the key
+                        if not value:
+                            del self._cache[key]
+                        else:
+                            self._cache[key] = (value, expiry)
+                        return [key, element]
+        else:
+            # Block with timeout
+            event = threading.Event()
+            with self._lock:
+                self._waiting_clients[key].append(event)
+            
+            # Wait for the event with timeout
+            if event.wait(timeout):
+                # Try to get the element
+                with self._lock:
+                    if key in self._cache:
+                        value, expiry = self._cache[key]
+                        if isinstance(value, list) and len(value) > 0:
+                            element = value.pop(0)
+                            # If list becomes empty, remove the key
+                            if not value:
+                                del self._cache[key]
+                            else:
+                                self._cache[key] = (value, expiry)
+                            return [key, element]
+            else:
+                # Timeout occurred, remove from waiting list
+                with self._lock:
+                    try:
+                        self._waiting_clients[key].remove(event)
+                    except ValueError:
+                        pass  # Event might have been removed already
+        
+        return None

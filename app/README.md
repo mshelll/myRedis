@@ -14,7 +14,7 @@ app/
 ├── rdb_parser.py            # Redis Database file parsing
 ├── command_handler.py       # Redis command processing
 ├── client_handler.py        # Client connection management
-└── README.md               # This file
+└── README.md                # This file
 ```
 
 ## Module Responsibilities

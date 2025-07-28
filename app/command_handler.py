@@ -27,6 +27,7 @@ class RedisCommandHandler:
             'lpush': self.handle_lpush,
             'llen': self.handle_llen,
             'lpop': self.handle_lpop,
+            'blpop': self.handle_blpop,
         }
 
     def handle_info(self, elems: list) -> None:
@@ -285,6 +286,21 @@ class RedisCommandHandler:
             response = RESPProtocol.encode_array(element)
         else:
             response = RESPProtocol.encode_bulk_string(element[0])
+        self.connection.sendall(response)
+
+    def handle_blpop(self, elems: list) -> None:
+        """Handle BLPOP command - remove and return the first element of a list"""
+        if len(elems) < 2:
+            error_msg = ERROR_MESSAGES["WRONG_NUMBER_OF_ARGS"].format(command="BLPOP")
+            response = RESPProtocol.encode_error(error_msg)
+            self.connection.sendall(response)
+            return
+        key = elems[1]
+        timeout = int(elems[2]) if len(elems) > 2 else 0
+        element = self.server.storage.blpop(key, timeout)
+        print(f"blpop element={element}")
+        response = RESPProtocol.encode_array(element)
+
         self.connection.sendall(response)
 
     def process_command(self, elems: list) -> None:
