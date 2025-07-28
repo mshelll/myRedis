@@ -162,10 +162,8 @@ class Storage:
         for i in range(pop_count):
             elems += [value.pop(0)]
         return elems
-    
-    def blpop(self, key: str, timeout: int) -> Optional[List[str]]:
-        """Remove and return the first element of a list, blocking if 
-        empty."""
+    def blpop(self, key: str, timeout: float) -> Optional[List[str]]:
+        """Remove and return the first element of a list, blocking if empty."""
         # First check if the key already has data
         with self._lock:
             if key in self._cache:
@@ -178,17 +176,17 @@ class Storage:
                     else:
                         self._cache[key] = (value, expiry)
                     return [key, element]
-        
+    
         # Key doesn't exist or is empty, so we need to wait
         if timeout == 0:
             # Block indefinitely
             event = threading.Event()
             with self._lock:
                 self._waiting_clients[key].append(event)
-            
+        
             # Wait for the event to be set
             event.wait()
-            
+        
             # Try to get the element
             with self._lock:
                 if key in self._cache:
@@ -202,11 +200,11 @@ class Storage:
                             self._cache[key] = (value, expiry)
                         return [key, element]
         else:
-            # Block with timeout
+            # Block with timeout (timeout is in seconds as float)
             event = threading.Event()
             with self._lock:
                 self._waiting_clients[key].append(event)
-            
+        
             # Wait for the event with timeout
             if event.wait(timeout):
                 # Try to get the element
@@ -228,5 +226,5 @@ class Storage:
                         self._waiting_clients[key].remove(event)
                     except ValueError:
                         pass  # Event might have been removed already
-        
+    
         return None

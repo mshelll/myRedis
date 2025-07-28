@@ -296,13 +296,25 @@ class RedisCommandHandler:
             self.connection.sendall(response)
             return
         key = elems[1]
-        timeout = int(elems[2]) if len(elems) > 2 else 0
+        # Parse timeout as float, then convert to seconds
+        try:
+            timeout = float(elems[2]) if len(elems) > 2 else 0.0
+        except ValueError:
+            response = RESPProtocol.encode_error(ERROR_MESSAGES["VALUE_NOT_INTEGER"])
+            self.connection.sendall(response)
+            return
+        
         element = self.server.storage.blpop(key, timeout)
         print(f"blpop element={element}")
-        response = RESPProtocol.encode_array(element)
+        
+        if element is None:
+            # Timeout occurred, return null
+            response = RESPProtocol.encode_bulk_string(None)
+        else:
+            # Return array with [key, value]
+            response = RESPProtocol.encode_array(element)
 
         self.connection.sendall(response)
-
     def process_command(self, elems: list) -> None:
         """Process a command by calling the appropriate handler"""
         if not elems:
